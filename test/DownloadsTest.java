@@ -128,6 +128,15 @@ public class DownloadsTest {
         check("picture 1.5 s back: a reset", Downloads.Timeline.on(8_500_000L, l2, s2, 0), 10_000_000L + Downloads.Timeline.STEP);
         check("sound 50 ms back: a reset", Downloads.Timeline.on(9_950_000L, l2, s2, 1), 10_000_000L + Downloads.Timeline.STEP);
         check("sound at the same time: kept", Downloads.Timeline.on(10_000_000L, new long[]{0, 10_000_000L}, new long[]{0, 0}, 1), 10_000_000L);
+        // DASH sound: the main one before an audio description, the chosen language before another
+        String sounds = "<MPD mediaPresentationDuration=\"PT8S\"><Period><AdaptationSet mimeType=\"video/mp4\"><SegmentTemplate media=\"v$Number$.m4s\" duration=\"4\"/><Representation id=\"v\" bandwidth=\"1\"/></AdaptationSet>"
+            + "<AdaptationSet mimeType=\"audio/mp4\" lang=\"en\"><Role schemeIdUri=\"urn:mpeg:dash:role:2011\" value=\"description\"/><SegmentTemplate media=\"ad$Number$.m4s\" duration=\"4\"/><Representation id=\"ad\" bandwidth=\"9\" codecs=\"mp4a.40.2\"/></AdaptationSet>"
+            + "<AdaptationSet mimeType=\"audio/mp4\" lang=\"en\"><Role schemeIdUri=\"urn:mpeg:dash:role:2011\" value=\"main\"/><SegmentTemplate media=\"en$Number$.m4s\" duration=\"4\"/><Representation id=\"en\" bandwidth=\"1\" codecs=\"mp4a.40.2\"/></AdaptationSet>"
+            + "<AdaptationSet mimeType=\"audio/mp4\" lang=\"hin\"><Role schemeIdUri=\"urn:mpeg:dash:role:2011\" value=\"dub\"/><SegmentTemplate media=\"hi$Number$.m4s\" duration=\"4\"/><Representation id=\"hi\" bandwidth=\"1\" codecs=\"mp4a.40.2\"/></AdaptationSet></Period></MPD>";
+        try {
+            check("main sound, not the description", Downloads.Dash.pick(sounds, "https://x.test/m.mpd").audio.segs.get(0).url, "https://x.test/en1.m4s");
+            check("the chosen language first", Downloads.Dash.pick(sounds, "https://x.test/m.mpd", "hi").audio.segs.get(0).url, "https://x.test/hi1.m4s");
+        } catch (Exception e) { fails++; System.out.println("FAIL sounds: " + e); }
         System.out.println(fails == 0 ? "all passed" : fails + " failed");
         if (fails > 0) System.exit(1);
     }

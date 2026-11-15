@@ -232,7 +232,7 @@ final class Downloads {
             String text = fetchText(look, url);
             if (dash || text.contains("<MPD")) {
                 p.ext = "mp4";
-                Dash.Pick d = Dash.pick(text, url);
+                Dash.Pick d = Dash.pick(text, url, audioLang());
                 p.height = d.height;
                 if (d.audio == null && !hasSound(look, d.video)) p.error = App.t(R.string.dl_no_sound);
                 return p;
@@ -558,9 +558,15 @@ final class Downloads {
         }
     }
 
+    /** The sound language chosen in Settings (Player, Audio language) for a stream that has several; null for the stream's own. */
+    static String audioLang() {
+        String p = App.prefs.getString("audioLang", "");
+        return p.isEmpty() ? Locale.getDefault().getLanguage() : p.equals(PlayerActivity.ORIGINAL) ? null : p;
+    }
+
     /** DASH: the manifest read down to the best picture and the sound, then fetched like the pieces of an HLS playlist. */
     private static void dash(Item it, String xml) throws Exception {
-        Dash.Pick p = Dash.pick(xml, it.url);
+        Dash.Pick p = Dash.pick(xml, it.url, audioLang());
         fetchTracks(it, p.video, p.audio);
     }
 
@@ -993,6 +999,11 @@ final class Downloads {
          * SegmentTemplate (a timeline, or a length) or a SegmentList; a stream that is one big file per quality is refused, as are live and protected ones.
          */
         static Pick pick(String xml, String mpdUrl) throws IOException {
+            return pick(xml, mpdUrl, null);
+        }
+
+        /** `lang`: the sound language to prefer ("hi"), or null for the stream's own main sound. */
+        static Pick pick(String xml, String mpdUrl, String lang) throws IOException {
             if (xml.contains("<!DOCTYPE") || xml.contains("<!ENTITY")) throw new IOException("not a DASH manifest");   // no entities from a stranger's file
             org.w3c.dom.Element mpd;
             try {
@@ -1021,7 +1032,7 @@ final class Downloads {
             String periodBase = baseUrl(period, mpdBase);
             org.w3c.dom.Element vRep = null, vSet = null, aRep = null, aSet = null;
             long vBw = -1, aBw = -1;
-            boolean aAac = false;
+            int aScore = -1;
             for (org.w3c.dom.Element set : kids(period, "AdaptationSet")) {
                 for (org.w3c.dom.Element rep : kids(set, "Representation")) {
                     String mime = either(rep, set, "mimeType"), codecs = either(rep, set, "codecs"), type = set.getAttribute("contentType");
@@ -1030,8 +1041,13 @@ final class Downloads {
                     long bw = number(rep.getAttribute("bandwidth"));
                     if (type.equals("video") && (codecs.isEmpty() || codecs.matches("(?i)(avc[13]|hvc1|hev1|av01|mp4v).*")) && bw > vBw) { vBw = bw; vRep = rep; vSet = set; }
                     if (type.equals("audio")) {
-                        boolean aac = codecs.toLowerCase(java.util.Locale.ROOT).startsWith("mp4a");
-                        if ((aac && !aAac) || (aac == aAac && (aSet == set || aRep == null) && bw > aBw)) { aBw = bw; aRep = rep; aSet = set; aAac = aac; }
+                        // never a description or a commentary when there is a sound for all; then the chosen language (a dub in it beats the
+                        // original), then the main sound, then AAC (an MP4 holds it), then bandwidth within that set
+                        String language = either(rep, set, "lang");
+                        int role = role(set);
+                        int score = (role > 0 ? 8 : 0) + (lang != null && language.length() >= 2 && lang.length() >= 2 && language.regionMatches(true, 0, lang, 0, 2) ? 4 : 0)
+                            + (role == 2 ? 2 : 0) + (codecs.toLowerCase(java.util.Locale.ROOT).startsWith("mp4a") ? 1 : 0);
+                        if (score > aScore || (score == aScore && aSet == set && bw > aBw)) { aBw = bw; aRep = rep; aSet = set; aScore = score; }
                     }
                 }
             }
@@ -1099,6 +1115,14 @@ final class Downloads {
             }
             if (t.segs.isEmpty()) throw new IOException("no segments in the DASH stream");
             return t;
+        }
+
+        /** 2: the main sound (or one with no role); 0: a description, a commentary or another sound for some; 1: any other (an alternate, a dub). */
+        static int role(org.w3c.dom.Element set) {
+            List<org.w3c.dom.Element> roles = kids(set, "Role");
+            if (roles.isEmpty()) return 2;
+            String v = roles.get(0).getAttribute("value");
+            return v.equals("main") ? 2 : v.matches("description|commentary|supplementary|emergency|enhanced-audio-intelligibility|karaoke") ? 0 : 1;
         }
 
         private static Seg add(Track t, String url, double dur) {
