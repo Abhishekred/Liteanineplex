@@ -363,10 +363,15 @@ public class TitleActivity extends Home {
             toast(App.t(Sources.added(Sources.SITES).isEmpty() ? R.string.sources_none : R.string.title_no_site_toast));
             return;
         }
-        // A site that has episode pages but no page for the show (most anime sites): Watch starts the first episode
-        // Watch on a series starts its first episode (with the loading screen while the app finds and plays it), on every site
-        if (e == null && t.series())
-            for (Catalog.Episode x : t.episodes) if (e == null || x.season < e.season || (x.season == e.season && x.number < e.number)) e = x;
+        // Watch on a series carries on where it was left, on any site (the next episode after a finished one), else starts the first,
+        // with the loading screen while the app finds and plays it. A site that has episode pages but no page for the show (most anime sites) needs that.
+        if (e == null && t.series()) {
+            List<int[]> all = new ArrayList<>();
+            for (Catalog.Episode x : t.episodes) all.add(new int[]{x.season, x.number});
+            int[] at = History.resume(History.list(), t.name, all);
+            for (Catalog.Episode x : t.episodes)
+                if (at != null ? x.season == at[0] && x.number == at[1] : e == null || x.season < e.season || (x.season == e.season && x.number < e.number)) e = x;
+        }
         startActivity(withTitle(titleIntent(s))
             .putExtra("season", e == null ? 0 : e.season).putExtra("episode", e == null ? 0 : e.number));
     }
