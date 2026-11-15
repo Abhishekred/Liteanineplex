@@ -550,13 +550,12 @@ final class Downloads {
         String map = vt.map;
         it.segs = segs.size();
         it.asegs = at == null ? 0 : at.segs.size();
-        // fMP4 pieces put back to back are one MP4. MPEG-TS pieces would make a .ts, which has no seek table (a player works the length out
-        // from timestamps, and a stream with odd ones gets no seek bar): they wait in a file of their own and are joined into an MP4, as picture and sound are
+        // fMP4 pieces put back to back are one MP4. MPEG-TS pieces make a .ts, which has no seek table (a player works the length out from
+        // timestamps, and a stream with odd ones gets no seek bar): written as the .ts, then made into an MP4 the way Make seekable does it
         boolean ts = at == null && vt.ts;
         File vfile = tmp(it, "v");
-        boolean legacy = ts && it.segDone > 0 && !it.out.isEmpty() && it.ext.equals("ts") && !vfile.exists();   // started as a .ts by an older version: finished as one
-        it.ext = legacy ? "ts" : "mp4";
-        Sink sink = at != null || (ts && !legacy) ? Sink.open(vfile) : Sink.open(it);
+        it.ext = ts ? "ts" : "mp4";
+        Sink sink = at != null ? Sink.open(vfile) : Sink.open(it);   // with a separate sound the picture waits in a file of its own until it is joined
         ExecutorService pool = Executors.newFixedThreadPool(connections());
         try {
             long pos = it.segDone == 0 ? 0 : it.done;
@@ -616,13 +615,16 @@ final class Downloads {
                 merge(it, vfile, afile);
                 vfile.delete();
                 afile.delete();
-            } else if (ts && !legacy) {
-                tsToMp4(it, vfile);
             }
             sink.finish();
         } finally {
             pool.shutdownNow();
             sink.close();
+        }
+        if (ts) {   // the .ts is whole and saved: now its MP4 (it stays the .ts, saying why, when that cannot be made)
+            toConvert(it);
+            save();
+            convert(it);
         }
     }
 
@@ -1128,43 +1130,12 @@ final class Downloads {
     }
 
     /**
-     * MPEG-TS pieces put back to back make a .ts, and a .ts has no seek table. Joined into an MP4 instead (the same way picture and sound
-     * are), which always has one. When that cannot be done the .ts is kept, with the reason under it on the Downloads screen.
-     */
-    private static void tsToMp4(Item it, File ts) throws Exception {
-        try {
-            merge(it, ts, ts);
-        } catch (Stopped e) {
-            throw e;
-        } catch (Exception e) {
-            Log.w(TAG, "mp4 from ts " + it.name, e);
-            dropOut(it);
-            it.ext = "ts";
-            it.note = String.valueOf(e.getMessage());
-            Sink out = Sink.open(it);   // NAME.ts, the pieces as they are
-            try (RandomAccessFile in = new RandomAccessFile(ts, "r")) {
-                long at = 0, len = in.length();
-                while (at < len) at += in.getChannel().transferTo(at, len - at, out.ch);
-                out.finish();
-            } finally {
-                out.close();
-            }
-        }
-        ts.delete();
-    }
-
-    /**
      * A finished .ts download made into an MP4 of the same name, in the background (the list shows it as a download that runs). The .ts goes once
      * the MP4 is whole; when it cannot be made the .ts stays as it was and says why.
      */
     static void makeSeekable(Item it) {
         if (!it.status.equals("done") || !it.ext.equals("ts") || it.out.isEmpty()) return;
-        it.src = it.out;
-        it.out = "";
-        it.path = "";
-        it.ext = "mp4";
-        it.kind = "convert";
-        it.note = "";
+        toConvert(it);
         it.error = "";
         it.stop = false;
         it.status = "queued";
@@ -1173,11 +1144,37 @@ final class Downloads {
         pump();
     }
 
+    /** The .ts (out) becomes the source of a conversion: the MP4 of the same name is made next to it. */
+    private static void toConvert(Item it) {
+        it.src = it.out;
+        it.out = "";
+        it.path = "";
+        it.ext = "mp4";
+        it.kind = "convert";
+        it.note = "";
+    }
+
+    /** The conversion is off: the .ts stays (out again), with the reason shown under it. */
+    private static void keepTs(Item it, String why) {
+        dropOut(it);
+        it.out = it.src;
+        it.src = "";
+        it.ext = "ts";
+        it.kind = "hls";
+        it.note = why;
+        pathOf(it);
+    }
+
     private static void convert(Item it) throws Exception {
         ParcelFileDescriptor p1 = null, p2 = null;
         MediaExtractor v = new MediaExtractor(), a = new MediaExtractor();
         try {
             p1 = openRead(it.src);
+            long need = p1.getStatSize() + (64L << 20);   // the MP4 is about the size of the .ts, which stays until it is whole
+            if (new android.os.StatFs(root()).getAvailableBytes() < need) {
+                keepTs(it, App.t(R.string.dl_no_space, android.text.format.Formatter.formatFileSize(App.app, need)));
+                return;
+            }
             p2 = openRead(it.src);
             it.segs = 1000;
             it.segDone = it.asegs = it.aSegDone = 0;
@@ -1190,13 +1187,7 @@ final class Downloads {
             throw e;
         } catch (Exception e) {   // the .ts stays as it was
             Log.w(TAG, "convert " + it.name, e);
-            dropOut(it);
-            it.out = it.src;
-            it.src = "";
-            it.ext = "ts";
-            it.kind = "hls";
-            it.note = String.valueOf(e.getMessage());
-            pathOf(it);
+            keepTs(it, String.valueOf(e.getMessage()));
             return;
         } finally {
             v.release();

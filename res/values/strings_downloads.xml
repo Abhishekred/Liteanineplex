@@ -46,4 +46,5 @@
     <string name="dl_ts_kept">Kept as .ts: %1$s</string>
     <string name="dl_converting">Making an MP4…</string>
     <string name="dl_dash_pieces">Download cannot find the pieces of this DASH stream</string>
+    <string name="dl_no_space">There is not enough free space to make an MP4 of it (it needs about %1$s)</string>
 </resources>
