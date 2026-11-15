@@ -364,13 +364,14 @@ final class Downloads {
 
     private static void run(Item it) {
         try {
-            if (it.kind.equals("convert")) convert(it);
+            boolean conv = it.kind.equals("convert");
+            if (conv) convert(it);
             else if (it.kind.equals("dash")) dash(it, fetchText(it, it.url));
             else if (it.kind.equals("hls")) hls(it);
             else file(it);
             it.status = "done";
             it.error = "";
-            DownloadService.finished(it.name);
+            if (!conv || it.ext.equals("mp4")) DownloadService.finished(it.name);   // Make seekable that kept the .ts: nothing new was finished
         } catch (Stopped e) {
             if (items.contains(it)) it.status = "paused";
         } catch (Exception e) {
@@ -1313,6 +1314,7 @@ final class Downloads {
         it.src = "";
         it.kind = "hls";
         it.note = "";
+        try (ParcelFileDescriptor o = openRead(it.out)) { it.total = it.done = o.getStatSize(); } catch (IOException ignored) { }   // the row shows the MP4's size, not the .ts's
     }
 
     private static ParcelFileDescriptor openRead(String out) throws IOException {
