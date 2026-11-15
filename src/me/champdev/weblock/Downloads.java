@@ -70,6 +70,9 @@ final class Downloads {
         long[] sizes = {};                   // fMP4 HLS: the bytes of each segment written so far (for the seek index)
         long pts0, sidxAt;                   // the first fragment's start time, and where the index box goes in the file
         int track, scale;                    // the video track's id and timescale (scale 0: no index for this download)
+        String src = "";                     // kind "convert": the finished .ts being made into an MP4 (`out` is the MP4 meanwhile)
+        String note = "";                    // why a .ts could not be made an MP4 (shown under it)
+        volatile boolean joining;            // the pieces are being joined into the MP4 (the last per cent)
         volatile boolean stop;
         volatile int conns;
         long speed, lastDone, lastAt;
@@ -85,7 +88,7 @@ final class Downloads {
         int percent() {
             if (kind.equals("file")) return total > 0 ? (int) Math.min(100, doneBytes() * 100 / total) : 0;
             int p = segs > 0 ? (segDone + aSegDone) * 100 / (segs + asegs) : 0;
-            return asegs > 0 && !status.equals("done") ? Math.min(p, 99) : p;   // the last per cent is the merge of picture and sound
+            return (asegs > 0 || joining) && !status.equals("done") ? Math.min(p, 99) : p;   // the last per cent is the join into the MP4
         }
 
         boolean active() {
@@ -160,6 +163,8 @@ final class Downloads {
                     it.sidxAt = o.optLong("sidxAt");
                     it.track = o.optInt("track");
                     it.scale = o.optInt("scale");
+                    it.src = o.optString("src");
+                    it.note = o.optString("note");
                     if (it.active()) it.status = "paused";   // the app was closed under it: it can be resumed, from where it was
                     items.add(it);
                 }
@@ -188,7 +193,7 @@ final class Downloads {
                     .put("status", it.status).put("error", it.error).put("ext", it.ext).put("out", it.out).put("path", it.path).put("total", it.total).put("done", it.done)
                     .put("created", it.created).put("segs", it.segs).put("segDone", it.segDone).put("asegs", it.asegs).put("aSegDone", it.aSegDone).put("aDone", it.aDone)
                     .put("from", array(it.from)).put("pos", array(it.pos)).put("to", array(it.to))
-                    .put("sizes", array(it.sizes)).put("pts0", it.pts0).put("sidxAt", it.sidxAt).put("track", it.track).put("scale", it.scale));
+                    .put("sizes", array(it.sizes)).put("pts0", it.pts0).put("sidxAt", it.sidxAt).put("track", it.track).put("scale", it.scale).put("src", it.src).put("note", it.note));
             }
         } catch (JSONException ignored) { }
         App.prefs.edit().putString("downloads", a.toString()).apply();
@@ -219,14 +224,11 @@ final class Downloads {
         try {
             String text = fetchText(look, url);
             if (!text.startsWith("#EXTM3U")) return p;
+            p.ext = "mp4";   // every playlist ends as an MP4: fMP4 pieces put together, picture and sound joined, MPEG-TS pieces converted
             if (text.contains("#EXT-X-STREAM-INF")) {
                 String[] best = bestVariant(text);
-                if (best == null) return p;
-                p.height = Integer.parseInt(best[1]);
-                if (audioUri(text, best[2]) != null) { p.ext = "mp4"; return p; }   // picture and sound come apart: they are joined into an MP4
-                text = fetchText(look, resolve(url, best[0]));
+                if (best != null) p.height = Integer.parseInt(best[1]);
             }
-            if (text.contains("#EXT-X-MAP:")) p.ext = "mp4";   // the pieces are fMP4: the file is an MP4
         } catch (IOException | RuntimeException e) {
             Log.w(TAG, "plan " + url, e);
         }
@@ -340,7 +342,7 @@ final class Downloads {
     private static void run(Item it) {
         try {
             if (it.kind.equals("dash")) throw new IOException(App.t(R.string.dl_dash));
-            if (it.kind.equals("hls")) hls(it); else file(it);
+            if (it.kind.equals("convert")) convert(it); else if (it.kind.equals("hls")) hls(it); else file(it);
             it.status = "done";
             it.error = "";
             DownloadService.finished(it.name);
@@ -488,9 +490,13 @@ final class Downloads {
         Track at = null;
         if (audioUrl != null) at = track(fetchText(it, audioUrl), audioUrl);
         it.asegs = at == null ? 0 : at.segs.size();
-        it.ext = at != null || map != null ? "mp4" : "ts";   // pieces of an fMP4 stream put back to back are one MP4; the others are an MPEG-TS file; picture and sound are joined into an MP4
+        // fMP4 pieces put back to back are one MP4. MPEG-TS pieces would make a .ts, which has no seek table (a player works the length out
+        // from timestamps, and a stream with odd ones gets no seek bar): they wait in a file of their own and are joined into an MP4, as picture and sound are
+        boolean ts = at == null && map == null;
         File vfile = tmp(it, "v");
-        Sink sink = at != null ? Sink.open(vfile) : Sink.open(it);   // with a separate sound the picture waits in a file of its own until it is joined
+        boolean legacy = ts && it.segDone > 0 && !it.out.isEmpty() && it.ext.equals("ts") && !vfile.exists();   // started as a .ts by an older version: finished as one
+        it.ext = legacy ? "ts" : "mp4";
+        Sink sink = at != null || (ts && !legacy) ? Sink.open(vfile) : Sink.open(it);
         ExecutorService pool = Executors.newFixedThreadPool(connections());
         try {
             long pos = it.segDone == 0 ? 0 : it.done;
@@ -550,6 +556,8 @@ final class Downloads {
                 merge(it, vfile, afile);
                 vfile.delete();
                 afile.delete();
+            } else if (ts && !legacy) {
+                tsToMp4(it, vfile);
             }
             sink.finish();
         } finally {
@@ -703,18 +711,29 @@ final class Downloads {
     /** Joins the picture and the sound into one MP4 (the download's file), samples copied as they are, in time order. Safe to run again: it starts the file over. */
     private static void merge(Item it, File video, File audio) throws Exception {
         MediaExtractor v = new MediaExtractor(), a = new MediaExtractor();
+        try {
+            v.setDataSource(video.getAbsolutePath());
+            a.setDataSource(audio.getAbsolutePath());   // the same file for MPEG-TS pieces: one extractor takes the picture, the other the sound
+            join(it, v, a, video.length() + (audio.equals(video) ? 0 : audio.length()));
+        } finally {
+            v.release();
+            a.release();
+        }
+    }
+
+    /** `v` gives the picture and `a` the sound (the same file twice for MPEG-TS); `size` is what they hold, for the progress of a "convert". */
+    private static void join(Item it, MediaExtractor v, MediaExtractor a, long size) throws Exception {
         Sink out = Sink.open(it);
         MediaMuxer mux = null;
         boolean started = false;
+        it.joining = true;
         try {
-            v.setDataSource(video.getAbsolutePath());
-            a.setDataSource(audio.getAbsolutePath());
             int vt = trackOf(v, "video/"), at = trackOf(a, "audio/");
-            if (vt < 0 || at < 0) throw new IOException(App.t(R.string.dl_merge_failed));
+            if (vt < 0 || at < 0) throw new IOException(App.t(R.string.dl_merge_failed) + " (" + (vt < 0 ? "no picture" : "no sound") + " found: " + tracks(vt < 0 ? v : a) + ")");
             v.selectTrack(vt);
             a.selectTrack(at);
             long vs = v.getSampleTime(), as = a.getSampleTime();
-            if (vs < 0 || as < 0) throw new IOException(App.t(R.string.dl_merge_failed));
+            if (vs < 0 || as < 0) throw new IOException(App.t(R.string.dl_merge_failed) + " (no samples)");
             long base = Math.min(vs, as);   // both start near 0, keeping the gap between them
             out.ch.truncate(0);
             mux = new MediaMuxer(out.fd(), MediaMuxer.OutputFormat.MUXER_OUTPUT_MPEG_4);
@@ -723,35 +742,190 @@ final class Downloads {
                 vi = mux.addTrack(v.getTrackFormat(vt));
                 ai = mux.addTrack(a.getTrackFormat(at));
             } catch (IllegalArgumentException | IllegalStateException e) {
-                throw new IOException(App.t(R.string.dl_merge_failed), e);   // a sound format MP4 cannot hold
+                throw new IOException(App.t(R.string.dl_merge_failed) + " (an MP4 cannot hold " + v.getTrackFormat(vt).getString(MediaFormat.KEY_MIME) + " with "
+                    + a.getTrackFormat(at).getString(MediaFormat.KEY_MIME) + ")", e);
             }
             mux.start();
             started = true;
             ByteBuffer buf = ByteBuffer.allocate(4 << 20);
             MediaCodec.BufferInfo info = new MediaCodec.BufferInfo();
+            long copied = 0;
+            long[] prev = {-1, -1};
+            int[] still = {0, 0};   // samples in a row with the very same time: a demuxer that lost the stream's timestamps
+            long[] last = {Long.MIN_VALUE, Long.MIN_VALUE}, shift = {0, 0};   // per track: the latest time, and the shift that carries it across a timestamp reset
             while (true) {
                 if (it.stop) throw new Stopped();
                 vs = v.getSampleTime();
                 as = a.getSampleTime();
                 if (vs < 0 && as < 0) break;
-                boolean pic = as < 0 || (vs >= 0 && vs <= as);
+                long vo = vs < 0 ? -1 : Timeline.on(vs, last, shift, 0), ao = as < 0 ? -1 : Timeline.on(as, last, shift, 1);
+                boolean pic = ao < 0 || (vo >= 0 && vo <= ao);
                 MediaExtractor e = pic ? v : a;
                 buf.clear();
                 int n = e.readSampleData(buf, 0);
                 if (n < 0) break;
-                info.set(0, n, e.getSampleTime() - base, (e.getSampleFlags() & MediaExtractor.SAMPLE_FLAG_SYNC) != 0 ? MediaCodec.BUFFER_FLAG_KEY_FRAME : 0);
+                long t = pic ? vo : ao;
+                long raw = pic ? vs : as;
+                int k = pic ? 0 : 1;
+                if (raw == prev[k] && ++still[k] > 30)   // every sample at one time: an MP4 made of them would play in a flash, so it is not made
+                    throw new IOException(App.t(R.string.dl_merge_failed) + " (the times in the stream stop moving at " + clock(Math.max(0, last[k] - base)) + ")");
+                if (raw != prev[k]) still[k] = 0;
+                prev[k] = raw;
+                last[pic ? 0 : 1] = Math.max(last[pic ? 0 : 1], t);
+                info.set(0, n, Math.max(0, t - base), (e.getSampleFlags() & MediaExtractor.SAMPLE_FLAG_SYNC) != 0 ? MediaCodec.BUFFER_FLAG_KEY_FRAME : 0);
                 mux.writeSampleData(pic ? vi : ai, buf, info);
+                if (it.kind.equals("convert")) {   // the bar of a conversion
+                    copied += n;
+                    it.done = Math.min(copied, size);
+                    it.segDone = (int) (it.segs * it.done / Math.max(1, size));
+                }
                 e.advance();
             }
             mux.stop();
             started = false;
             out.finish();
         } finally {
+            it.joining = false;
             if (mux != null) try { if (started) mux.stop(); } catch (RuntimeException ignored) { }
             if (mux != null) mux.release();
+            out.close();
+        }
+    }
+
+    /** Sample times on one continuous timeline. */
+    static final class Timeline {
+        static final long JUMP = 3_000_000, STEP = 20_000;   // µs: a time this far from the track's latest is a reset (a joined segment, an ad); the next sample goes one step on
+
+        /**
+         * `raw` as the track's time: a stream whose timestamps start over or jump (the pieces were cut from different places) goes on from
+         * where the track was instead of back to 0, which an MP4 cannot hold. k: 0 picture, 1 sound; `last` is each track's latest time, `shift` what is added.
+         */
+        static long on(long raw, long[] last, long[] shift, int k) {
+            long t = raw + shift[k];
+            if (last[k] != Long.MIN_VALUE && Math.abs(t - last[k]) > JUMP) {
+                shift[k] += last[k] + STEP - t;
+                t = last[k] + STEP;
+            }
+            return t;
+        }
+    }
+
+    private static String clock(long us) {
+        long s = us / 1_000_000;
+        return String.format(Locale.ROOT, "%d:%02d", s / 60, s % 60);
+    }
+
+    /** The tracks of a source as "video/avc, audio/ac3", for a message that says what was in the stream. */
+    private static String tracks(MediaExtractor x) {
+        StringBuilder b = new StringBuilder();
+        for (int i = 0; i < x.getTrackCount(); i++) b.append(i > 0 ? ", " : "").append(x.getTrackFormat(i).getString(MediaFormat.KEY_MIME));
+        return b.length() == 0 ? "nothing" : b.toString();
+    }
+
+    /**
+     * MPEG-TS pieces put back to back make a .ts, and a .ts has no seek table. Joined into an MP4 instead (the same way picture and sound
+     * are), which always has one. When that cannot be done the .ts is kept, with the reason under it on the Downloads screen.
+     */
+    private static void tsToMp4(Item it, File ts) throws Exception {
+        try {
+            merge(it, ts, ts);
+        } catch (Stopped e) {
+            throw e;
+        } catch (Exception e) {
+            Log.w(TAG, "mp4 from ts " + it.name, e);
+            dropOut(it);
+            it.ext = "ts";
+            it.note = String.valueOf(e.getMessage());
+            Sink out = Sink.open(it);   // NAME.ts, the pieces as they are
+            try (RandomAccessFile in = new RandomAccessFile(ts, "r")) {
+                long at = 0, len = in.length();
+                while (at < len) at += in.getChannel().transferTo(at, len - at, out.ch);
+                out.finish();
+            } finally {
+                out.close();
+            }
+        }
+        ts.delete();
+    }
+
+    /**
+     * A finished .ts download made into an MP4 of the same name, in the background (the list shows it as a download that runs). The .ts goes once
+     * the MP4 is whole; when it cannot be made the .ts stays as it was and says why.
+     */
+    static void makeSeekable(Item it) {
+        if (!it.status.equals("done") || !it.ext.equals("ts") || it.out.isEmpty()) return;
+        it.src = it.out;
+        it.out = "";
+        it.path = "";
+        it.ext = "mp4";
+        it.kind = "convert";
+        it.note = "";
+        it.error = "";
+        it.stop = false;
+        it.status = "queued";
+        version++;
+        save();
+        pump();
+    }
+
+    private static void convert(Item it) throws Exception {
+        ParcelFileDescriptor p1 = null, p2 = null;
+        MediaExtractor v = new MediaExtractor(), a = new MediaExtractor();
+        try {
+            p1 = openRead(it.src);
+            p2 = openRead(it.src);
+            it.segs = 1000;
+            it.segDone = it.asegs = it.aSegDone = 0;
+            it.total = p1.getStatSize();
+            it.done = it.aDone = 0;
+            v.setDataSource(p1.getFileDescriptor());
+            a.setDataSource(p2.getFileDescriptor());
+            join(it, v, a, it.total);
+        } catch (Stopped e) {
+            throw e;
+        } catch (Exception e) {   // the .ts stays as it was
+            Log.w(TAG, "convert " + it.name, e);
+            dropOut(it);
+            it.out = it.src;
+            it.src = "";
+            it.ext = "ts";
+            it.kind = "hls";
+            it.note = String.valueOf(e.getMessage());
+            pathOf(it);
+            return;
+        } finally {
             v.release();
             a.release();
-            out.close();
+            try { if (p1 != null) p1.close(); } catch (IOException ignored) { }
+            try { if (p2 != null) p2.close(); } catch (IOException ignored) { }
+        }
+        deleteFile(it.src);   // the MP4 is whole: the .ts goes
+        it.src = "";
+        it.kind = "hls";
+        it.note = "";
+    }
+
+    private static ParcelFileDescriptor openRead(String out) throws IOException {
+        ParcelFileDescriptor p = out.startsWith("content://") ? App.app.getContentResolver().openFileDescriptor(Uri.parse(out), "r")
+            : ParcelFileDescriptor.open(new File(out), ParcelFileDescriptor.MODE_READ_ONLY);
+        if (p == null) throw new IOException("the file cannot be opened");
+        return p;
+    }
+
+    /** Removes the half-made file of `it` (its MP4 that did not work out) and forgets it. */
+    private static void dropOut(Item it) {
+        deleteFile(it.out);
+        it.out = "";
+        it.path = "";
+    }
+
+    private static void deleteFile(String out) {
+        if (out.isEmpty()) return;
+        try {
+            if (out.startsWith("content://")) App.app.getContentResolver().delete(Uri.parse(out), null, null);
+            else new File(out).delete();
+        } catch (RuntimeException e) {
+            Log.w(TAG, "delete " + out, e);
         }
     }
 
@@ -1070,13 +1244,8 @@ final class Downloads {
         static void delete(Item it) {
             tmp(it, "v").delete();
             tmp(it, "a").delete();
-            if (it.out.isEmpty()) return;
-            try {
-                if (it.out.startsWith("content://")) App.app.getContentResolver().delete(Uri.parse(it.out), null, null);
-                else new File(it.out).delete();
-            } catch (RuntimeException e) {
-                Log.w(TAG, "delete " + it.out, e);
-            }
+            deleteFile(it.src);
+            deleteFile(it.out);
         }
     }
 }
