@@ -100,6 +100,12 @@ final class Downloads {
         Stopped() { super("stopped"); }
     }
 
+    /** A stream that cannot be downloaded, with the string that says why (turned into words where it is shown, so a test needs no Android). */
+    static final class Refused extends IOException {
+        final int res;
+        Refused(int res) { super("refused " + res); this.res = res; }
+    }
+
     static final List<Item> items = new CopyOnWriteArrayList<>();
     static volatile int version;   // goes up whenever the list or a status changes, so the screen knows to redraw
     private static boolean loaded, ticking;
@@ -217,12 +223,17 @@ final class Downloads {
     static Plan plan(String url, String headers, boolean dash) {
         Plan p = new Plan();
         p.ext = expectedExt(url, dash);
-        if (dash || !p.ext.equals("ts")) return p;   // DASH is refused anyway; a plain file's extension is in its address
+        if (!p.ext.equals("ts") && !dash) return p;   // a plain file's extension is in its address
         Item look = new Item();
         look.url = url;
         look.headers = headers == null || headers.isEmpty() ? "{}" : headers;
         try {
             String text = fetchText(look, url);
+            if (dash || text.contains("<MPD")) {
+                p.ext = "mp4";
+                p.height = Dash.pick(text, url).height;
+                return p;
+            }
             if (!text.startsWith("#EXTM3U")) return p;
             p.ext = "mp4";   // every playlist ends as an MP4: fMP4 pieces put together, picture and sound joined, MPEG-TS pieces converted
             if (text.contains("#EXT-X-STREAM-INF")) {
@@ -341,8 +352,10 @@ final class Downloads {
 
     private static void run(Item it) {
         try {
-            if (it.kind.equals("dash")) throw new IOException(App.t(R.string.dl_dash));
-            if (it.kind.equals("convert")) convert(it); else if (it.kind.equals("hls")) hls(it); else file(it);
+            if (it.kind.equals("convert")) convert(it);
+            else if (it.kind.equals("dash")) dash(it, fetchText(it, it.url));
+            else if (it.kind.equals("hls")) hls(it);
+            else file(it);
             it.status = "done";
             it.error = "";
             DownloadService.finished(it.name);
@@ -351,7 +364,7 @@ final class Downloads {
         } catch (Exception e) {
             Log.w(TAG, it.name, e);
             it.status = "failed";
-            it.error = String.valueOf(e.getMessage());
+            it.error = e instanceof Refused ? App.t(((Refused) e).res) : String.valueOf(e.getMessage());
         } finally {
             it.speed = 0;
             it.conns = 0;
@@ -468,31 +481,78 @@ final class Downloads {
     static final class Seg {
         String url, key;
         byte[] iv;
-        double dur;   // seconds, from its #EXTINF
+        double dur;           // seconds, from its #EXTINF (HLS) or the manifest (DASH)
+        long from = -1, len;  // a piece that is a range of a bigger file: its first byte and its length (from -1: the whole of url)
     }
 
     private static void hls(Item it) throws Exception {
         String text = fetchText(it, it.url);
+        if (text.contains("<MPD")) { it.kind = "dash"; dash(it, text); return; }   // a DASH manifest after all
         if (!text.startsWith("#EXTM3U")) { it.kind = "file"; file(it); return; }   // not a playlist after all: a plain file
         String base = it.url, audioUrl = null;
         if (text.contains("#EXT-X-STREAM-INF")) {   // the main playlist: the best quality
             String[] best = Hls.bestVariant(text);
             if (best == null) throw new IOException("an empty playlist");
             String au = audioUri(text, best[2]);   // the sound in a playlist of its own, not in the pieces of the picture
-            if (au != null) audioUrl = resolve(base, au);
-            base = resolve(base, best[0]);
+            if (au != null) audioUrl = Hls.resolve(base, au);
+            base = Hls.resolve(base, best[0]);
             text = fetchText(it, base);
         }
-        Track vt = track(text, base);
+        Track vt = Hls.track(text, base);
+        Track at = audioUrl != null ? Hls.track(fetchText(it, audioUrl), audioUrl) : null;
+        fetchTracks(it, vt, at);
+    }
+
+    static final long CHUNK = 4L << 20;
+
+    /** A track that is one whole file is cut into ranges of 4 MB, so it is fetched ahead, written in order and resumed like the pieces of a playlist. */
+    private static void cut(Item it, Track t) throws IOException {
+        if (!t.whole) return;
+        String url = t.segs.get(0).url;
+        long size = size(it, url);
+        t.segs.clear();
+        for (long from = 0; from < size; from += CHUNK) {
+            Seg s = new Seg();
+            s.url = url;
+            s.from = from;
+            s.len = Math.min(CHUNK, size - from);
+            t.segs.add(s);
+        }
+        t.whole = false;
+    }
+
+    /** The size of a file, asked for as its first byte (the answer carries it). */
+    private static long size(Item it, String url) throws IOException {
+        HttpURLConnection c = connect(it, url, 0, 0);
+        try {
+            String cr = c.getHeaderField("Content-Range");
+            int slash = cr == null ? -1 : cr.lastIndexOf('/');
+            if (c.getResponseCode() != 206 || slash < 0) throw new IOException("HTTP " + c.getResponseCode() + " (the site does not allow ranges)");
+            return Long.parseLong(cr.substring(slash + 1).trim());
+        } catch (NumberFormatException e) {
+            throw new IOException("the size of the file is not known");
+        } finally {
+            c.disconnect();
+        }
+    }
+
+    /** DASH: the manifest read down to the best picture and the sound, then fetched like the pieces of an HLS playlist. */
+    private static void dash(Item it, String xml) throws Exception {
+        Dash.Pick p = Dash.pick(xml, it.url);
+        fetchTracks(it, p.video, p.audio);
+    }
+
+    /** The picture's pieces (and the sound's, when it is a playlist of its own) fetched in parallel, written in order and made into the file. */
+    private static void fetchTracks(Item it, Track vt, Track at) throws Exception {
+        cut(it, vt);
+        if (at != null) cut(it, at);
         List<Seg> segs = vt.segs;
         String map = vt.map;
         it.segs = segs.size();
-        Track at = null;
-        if (audioUrl != null) at = track(fetchText(it, audioUrl), audioUrl);
         it.asegs = at == null ? 0 : at.segs.size();
         // fMP4 pieces put back to back are one MP4. MPEG-TS pieces would make a .ts, which has no seek table (a player works the length out
         // from timestamps, and a stream with odd ones gets no seek bar): they wait in a file of their own and are joined into an MP4, as picture and sound are
-        boolean ts = at == null && map == null;
+        boolean ts = at == null && vt.ts;
         File vfile = tmp(it, "v");
         boolean legacy = ts && it.segDone > 0 && !it.out.isEmpty() && it.ext.equals("ts") && !vfile.exists();   // started as a .ts by an older version: finished as one
         it.ext = legacy ? "ts" : "mp4";
@@ -501,7 +561,7 @@ final class Downloads {
         try {
             long pos = it.segDone == 0 ? 0 : it.done;
             if (it.segDone == 0 && map != null) {
-                byte[] init = get(it, map);
+                byte[] init = get(it, map, vt.mapFrom, vt.mapLen);
                 Sink.write(sink.ch, ByteBuffer.wrap(init), 0);
                 pos = init.length;
                 int[] tr = segs.size() <= 65535 && at == null ? videoTrack(init) : null;
@@ -568,54 +628,12 @@ final class Downloads {
 
     static final class Track {
         final List<Seg> segs = new ArrayList<>();
-        String map;   // the init segment of an fMP4 stream
+        String map;                  // the init segment of an fMP4 stream
+        long mapFrom = -1, mapLen;   // ... when it is a range of a file
+        boolean ts;                  // MPEG-TS pieces (no init segment): joined into an MP4 at the end
+        boolean whole;               // one whole file (DASH "on demand": a BaseURL per quality), cut into ranges when it is fetched
     }
 
-    /** The pieces of a finished media playlist, with their keys, and the init segment of an fMP4 one. */
-    private static Track track(String text, String base) throws IOException {
-        if (!text.contains("#EXT-X-ENDLIST")) throw new IOException(App.t(R.string.dl_live));
-        Track t = new Track();
-        String keyUri = null;
-        byte[] keyIv = null;
-        boolean aes = false;
-        long seq = 0;
-        double dur = 0;
-        for (String raw : text.split("\\r?\\n")) {
-            String l = raw.trim();
-            if (l.isEmpty()) continue;
-            if (l.startsWith("#EXTINF:")) {
-                String d = l.substring(8);
-                int comma = d.indexOf(',');
-                try { dur = Double.parseDouble((comma >= 0 ? d.substring(0, comma) : d).trim()); } catch (NumberFormatException e) { dur = 0; }
-            } else if (l.startsWith("#EXT-X-MEDIA-SEQUENCE:")) {
-                try { seq = Long.parseLong(l.substring(22).trim()); } catch (NumberFormatException ignored) { }
-            } else if (l.startsWith("#EXT-X-KEY:")) {
-                String method = Hls.attr(l, "METHOD");
-                if ("AES-128".equals(method)) {
-                    aes = true;
-                    keyUri = resolve(base, Hls.attr(l, "URI"));
-                    keyIv = ivFromHex(Hls.attr(l, "IV"));
-                } else if ("NONE".equals(method)) {
-                    aes = false;
-                } else {
-                    throw new IOException(App.t(R.string.dl_protected));
-                }
-            } else if (l.startsWith("#EXT-X-BYTERANGE:") || (l.startsWith("#EXT-X-MAP:") && Hls.attr(l, "BYTERANGE") != null)) {
-                throw new IOException(App.t(R.string.dl_byterange));   // all the pieces in one file: taking it for the init segment would read the whole file into memory
-            } else if (l.startsWith("#EXT-X-MAP:")) {
-                if (t.map == null) t.map = resolve(base, Hls.attr(l, "URI"));
-            } else if (l.charAt(0) != '#') {
-                Seg s = new Seg();
-                s.url = resolve(base, l);
-                s.dur = dur;
-                dur = 0;
-                if (aes) { s.key = keyUri; s.iv = keyIv != null ? keyIv : ivFromNumber(seq + t.segs.size()); }
-                t.segs.add(s);
-            }
-        }
-        if (t.segs.isEmpty()) throw new IOException("no segments in the playlist");
-        return t;
-    }
 
     /** The address (as written) of the audio playlist of a group in a main playlist: the default one, else the first. Null when the sound is in the picture's own pieces. */
     private static String audioUri(String text, String group) {
@@ -648,7 +666,7 @@ final class Downloads {
         try {
             long pos = it.aSegDone == 0 ? 0 : it.aDone;
             if (it.aSegDone == 0 && t.map != null) {
-                byte[] init = get(it, t.map);
+                byte[] init = get(it, t.map, t.mapFrom, t.mapLen);
                 Sink.write(sink.ch, ByteBuffer.wrap(init), 0);
                 pos = init.length;
             }
@@ -774,6 +792,90 @@ final class Downloads {
 
     /** Reading a playlist (a class of its own so a test can use it without the rest of the download manager). */
     static final class Hls {
+        static byte[] ivFromNumber(long n) {
+            byte[] iv = new byte[16];
+            for (int i = 15; i >= 8; i--) { iv[i] = (byte) n; n >>= 8; }
+            return iv;
+        }
+
+        static byte[] ivFromHex(String hex) {
+            if (hex == null) return null;
+            hex = hex.replaceFirst("^0[xX]", "");
+            while (hex.length() < 32) hex = "0" + hex;
+            byte[] iv = new byte[16];
+            for (int i = 0; i < 16; i++) iv[i] = (byte) Integer.parseInt(hex.substring(i * 2, i * 2 + 2), 16);
+            return iv;
+        }
+
+        static String resolve(String base, String ref) throws IOException {
+            if (ref == null) throw new IOException("a playlist line without an address");
+            return new URL(new URL(base), ref).toString();
+        }
+
+        /** The pieces of a finished media playlist, with their keys, byte ranges and the init segment of an fMP4 one. */
+        static Track track(String text, String base) throws IOException {
+            if (!text.contains("#EXT-X-ENDLIST")) throw new Refused(R.string.dl_live);
+            Track t = new Track();
+            String keyUri = null;
+            byte[] keyIv = null;
+            boolean aes = false;
+            long seq = 0, rangeFrom = -1, rangeLen = -1, lastEnd = 0;   // a #EXT-X-BYTERANGE is for the next piece; with no offset it follows the one before
+            double dur = 0;
+            for (String raw : text.split("\\r?\\n")) {
+                String l = raw.trim();
+                if (l.isEmpty()) continue;
+                if (l.startsWith("#EXTINF:")) {
+                    String d = l.substring(8);
+                    int comma = d.indexOf(',');
+                    try { dur = Double.parseDouble((comma >= 0 ? d.substring(0, comma) : d).trim()); } catch (NumberFormatException e) { dur = 0; }
+                } else if (l.startsWith("#EXT-X-MEDIA-SEQUENCE:")) {
+                    try { seq = Long.parseLong(l.substring(22).trim()); } catch (NumberFormatException ignored) { }
+                } else if (l.startsWith("#EXT-X-KEY:")) {
+                    String method = attr(l, "METHOD");
+                    if ("AES-128".equals(method)) {
+                        aes = true;
+                        keyUri = resolve(base, attr(l, "URI"));
+                        keyIv = ivFromHex(attr(l, "IV"));
+                    } else if ("NONE".equals(method)) {
+                        aes = false;
+                    } else {
+                        throw new Refused(R.string.dl_protected);
+                    }
+                } else if (l.startsWith("#EXT-X-BYTERANGE:")) {
+                    String[] r = l.substring(17).trim().split("@");
+                    try {
+                        rangeLen = Long.parseLong(r[0].trim());
+                        rangeFrom = r.length > 1 ? Long.parseLong(r[1].trim()) : lastEnd;
+                    } catch (NumberFormatException e) {
+                        throw new IOException("a bad byte range: " + l);
+                    }
+                } else if (l.startsWith("#EXT-X-MAP:")) {
+                    if (t.map == null) {
+                        t.map = resolve(base, attr(l, "URI"));
+                        String br = attr(l, "BYTERANGE");   // "578@0": the init segment is a range of the same file
+                        if (br != null) try {
+                            String[] r = br.split("@");
+                            t.mapLen = Long.parseLong(r[0].trim());
+                            t.mapFrom = r.length > 1 ? Long.parseLong(r[1].trim()) : 0;
+                        } catch (NumberFormatException e) {
+                            throw new IOException("a bad byte range: " + l);
+                        }
+                    }
+                } else if (l.charAt(0) != '#') {
+                    Seg s = new Seg();
+                    s.url = resolve(base, l);
+                    s.dur = dur;
+                    dur = 0;
+                    if (rangeLen >= 0) { s.from = rangeFrom; s.len = rangeLen; lastEnd = rangeFrom + rangeLen; rangeLen = -1; }
+                    if (aes) { s.key = keyUri; s.iv = keyIv != null ? keyIv : ivFromNumber(seq + t.segs.size()); }
+                    t.segs.add(s);
+                }
+            }
+            if (t.segs.isEmpty()) throw new IOException("no segments in the playlist");
+            t.ts = t.map == null;
+            return t;
+        }
+
     /** One attribute of a playlist tag line: KEY=value or KEY="value". */
     static String attr(String line, String key) {
         Matcher m = Pattern.compile("[:,]" + key + "=(\"([^\"]*)\"|[^,]*)").matcher(line);
@@ -808,6 +910,191 @@ final class Downloads {
         if (best == null) { best = any; group = anyGroup; height = anyHeight; }
         return best == null ? null : new String[]{best, String.valueOf(height), group};
     }
+    }
+
+    /** A DASH manifest (.mpd) read down to what to fetch: the best picture and the sound as lists of pieces, like the pieces of an HLS playlist. */
+    static final class Dash {
+        static final class Pick {
+            Track video, audio;   // audio null when the picture carries its own sound
+            int height;
+        }
+
+        /**
+         * One period (the longest), its best MP4 picture (highest bandwidth, a codec an MP4 holds) and its sound (AAC first). Pieces come from a
+         * SegmentTemplate (a timeline, or a length) or a SegmentList; a stream that is one big file per quality is refused, as are live and protected ones.
+         */
+        static Pick pick(String xml, String mpdUrl) throws IOException {
+            if (xml.contains("<!DOCTYPE") || xml.contains("<!ENTITY")) throw new IOException("not a DASH manifest");   // no entities from a stranger's file
+            org.w3c.dom.Element mpd;
+            try {
+                mpd = javax.xml.parsers.DocumentBuilderFactory.newInstance().newDocumentBuilder().parse(new org.xml.sax.InputSource(new java.io.StringReader(xml))).getDocumentElement();
+            } catch (Exception e) {
+                throw new IOException("not a DASH manifest", e);
+            }
+            if ("dynamic".equals(mpd.getAttribute("type"))) throw new Refused(R.string.dl_live);
+            double total = seconds(mpd.getAttribute("mediaPresentationDuration"));
+            String mpdBase = baseUrl(mpd, mpdUrl);
+            List<org.w3c.dom.Element> periods = kids(mpd, "Period");
+            org.w3c.dom.Element period = null;
+            double length = 0;
+            for (int i = 0; i < periods.size(); i++) {
+                org.w3c.dom.Element p = periods.get(i);
+                double d = seconds(p.getAttribute("duration"));
+                if (d <= 0) d = (i + 1 < periods.size() ? seconds(periods.get(i + 1).getAttribute("start")) : total) - seconds(p.getAttribute("start"));
+                if (d <= 0) d = total;
+                if (period == null || d > length) { period = p; length = d; }
+            }
+            if (period == null) throw new IOException("no period in the manifest");
+            String periodBase = baseUrl(period, mpdBase);
+            org.w3c.dom.Element vRep = null, vSet = null, aRep = null, aSet = null;
+            long vBw = -1, aBw = -1;
+            boolean aAac = false;
+            for (org.w3c.dom.Element set : kids(period, "AdaptationSet")) {
+                for (org.w3c.dom.Element rep : kids(set, "Representation")) {
+                    String mime = either(rep, set, "mimeType"), codecs = either(rep, set, "codecs"), type = set.getAttribute("contentType");
+                    if (type.isEmpty()) type = !mime.isEmpty() ? mime.split("/")[0] : codecs.matches("(?i)(avc|hvc|hev|av0|mp4v).*") ? "video" : codecs.matches("(?i)(mp4a|ac-3|ec-3|opus).*") ? "audio" : "";
+                    if (!mime.isEmpty() && !mime.equals("video/mp4") && !mime.equals("audio/mp4")) continue;   // WebM, subtitles
+                    long bw = number(rep.getAttribute("bandwidth"));
+                    if (type.equals("video") && (codecs.isEmpty() || codecs.matches("(?i)(avc[13]|hvc1|hev1|av01|mp4v).*")) && bw > vBw) { vBw = bw; vRep = rep; vSet = set; }
+                    if (type.equals("audio")) {
+                        boolean aac = codecs.toLowerCase(java.util.Locale.ROOT).startsWith("mp4a");
+                        if ((aac && !aAac) || (aac == aAac && (aSet == set || aRep == null) && bw > aBw)) { aBw = bw; aRep = rep; aSet = set; aAac = aac; }
+                    }
+                }
+            }
+            if (vRep == null) throw new IOException("no MP4 picture in this DASH stream");
+            Pick pick = new Pick();
+            pick.video = track(period, vSet, vRep, periodBase, length);
+            pick.height = (int) number(vRep.getAttribute("height"));
+            if (aRep != null) pick.audio = track(period, aSet, aRep, periodBase, length);
+            return pick;
+        }
+
+        static Track track(org.w3c.dom.Element period, org.w3c.dom.Element set, org.w3c.dom.Element rep, String periodBase, double length) throws IOException {
+            if (!kids(set, "ContentProtection").isEmpty() || !kids(rep, "ContentProtection").isEmpty()) throw new Refused(R.string.dl_protected);
+            String base = baseUrl(rep, baseUrl(set, periodBase)), id = rep.getAttribute("id");
+            long bw = number(rep.getAttribute("bandwidth"));
+            List<org.w3c.dom.Element> templates = new ArrayList<>();   // its attributes can be spread over the Representation, the set and the period
+            for (org.w3c.dom.Element e : new org.w3c.dom.Element[]{rep, set, period}) { List<org.w3c.dom.Element> k = kids(e, "SegmentTemplate"); if (!k.isEmpty()) templates.add(k.get(0)); }
+            Track t = new Track();
+            if (!templates.isEmpty()) {
+                long scale = Math.max(1, number(from(templates, "timescale")));
+                String init = from(templates, "initialization"), media = from(templates, "media");
+                if (media.isEmpty()) throw new IOException("a DASH stream without segment addresses");
+                if (!init.isEmpty()) t.map = Hls.resolve(base, fill(init, id, bw, 0, 0));
+                long number = from(templates, "startNumber").isEmpty() ? 1 : number(from(templates, "startNumber"));
+                org.w3c.dom.Element timeline = null;
+                for (org.w3c.dom.Element e : templates) if (timeline == null && !kids(e, "SegmentTimeline").isEmpty()) timeline = kids(e, "SegmentTimeline").get(0);
+                if (timeline != null) {
+                    long time = 0, first = -1;
+                    for (org.w3c.dom.Element s : kids(timeline, "S")) {
+                        if (!s.getAttribute("t").isEmpty()) time = number(s.getAttribute("t"));
+                        if (first < 0) first = time;
+                        long d = number(s.getAttribute("d")), r = s.getAttribute("r").isEmpty() ? 0 : (long) Double.parseDouble(s.getAttribute("r"));
+                        if (d <= 0) throw new IOException("a DASH timeline without lengths");
+                        if (r < 0) r = Math.max(0, (long) Math.ceil((first + length * scale - time) / d) - 1);   // "until the end of the period"
+                        for (long i = 0; i <= r; i++, time += d, number++) add(t, Hls.resolve(base, fill(media, id, bw, number, time)), d / (double) scale);
+                    }
+                } else {
+                    long d = number(from(templates, "duration"));
+                    if (d <= 0 || length <= 0) throw new IOException("a DASH stream without segment lengths");
+                    long count = (long) Math.ceil(length * scale / d);
+                    for (long i = 0; i < count; i++) add(t, Hls.resolve(base, fill(media, id, bw, number + i, i * d)), Math.min(d / (double) scale, length - i * d / (double) scale));
+                }
+            } else {
+                org.w3c.dom.Element list = null;
+                for (org.w3c.dom.Element e : new org.w3c.dom.Element[]{rep, set, period}) if (list == null && !kids(e, "SegmentList").isEmpty()) list = kids(e, "SegmentList").get(0);
+                if (list == null) {
+                    if (kids(rep, "BaseURL").isEmpty() && kids(set, "BaseURL").isEmpty()) throw new Refused(R.string.dl_dash_pieces);
+                    t.whole = true;   // "on demand": one file per quality (its own index inside), fetched in ranges
+                    add(t, base, length);
+                    return t;
+                }
+                long scale = Math.max(1, number(list.getAttribute("timescale")));
+                double d = number(list.getAttribute("duration")) / (double) scale;
+                List<org.w3c.dom.Element> init = kids(list, "Initialization");
+                if (!init.isEmpty()) {
+                    t.map = init.get(0).getAttribute("sourceURL").isEmpty() ? base : Hls.resolve(base, init.get(0).getAttribute("sourceURL"));
+                    long[] r = range(init.get(0).getAttribute("range"));
+                    if (r != null) { t.mapFrom = r[0]; t.mapLen = r[1]; }
+                }
+                for (org.w3c.dom.Element u : kids(list, "SegmentURL")) {
+                    Seg s = add(t, u.getAttribute("media").isEmpty() ? base : Hls.resolve(base, u.getAttribute("media")), d);
+                    long[] r = range(u.getAttribute("mediaRange"));
+                    if (r != null) { s.from = r[0]; s.len = r[1]; }
+                }
+            }
+            if (t.segs.isEmpty()) throw new IOException("no segments in the DASH stream");
+            return t;
+        }
+
+        private static Seg add(Track t, String url, double dur) {
+            Seg s = new Seg();
+            s.url = url;
+            s.dur = dur;
+            t.segs.add(s);
+            return s;
+        }
+
+        /** "0-1234" as {first, length}. */
+        static long[] range(String r) {
+            if (r == null || !r.matches("\\d+-\\d+")) return null;
+            String[] p = r.split("-");
+            return new long[]{Long.parseLong(p[0]), Long.parseLong(p[1]) - Long.parseLong(p[0]) + 1};
+        }
+
+        /** A template with $RepresentationID$, $Number$, $Bandwidth$ and $Time$ filled in ($Number%05d$ pads; $$ is a dollar). */
+        static String fill(String template, String id, long bandwidth, long number, long time) {
+            java.util.regex.Matcher m = Pattern.compile("\\$(RepresentationID|Number|Bandwidth|Time)?(?:%0(\\d+)d)?\\$").matcher(template);
+            StringBuffer out = new StringBuffer();
+            while (m.find()) {
+                String what = m.group(1), v;
+                if (what == null) v = "$";
+                else if (what.equals("RepresentationID")) v = id;
+                else {
+                    long n = what.equals("Number") ? number : what.equals("Bandwidth") ? bandwidth : time;
+                    v = m.group(2) == null ? String.valueOf(n) : String.format(java.util.Locale.ROOT, "%0" + m.group(2) + "d", n);
+                }
+                m.appendReplacement(out, java.util.regex.Matcher.quoteReplacement(v));
+            }
+            return m.appendTail(out).toString();
+        }
+
+        /** An ISO 8601 duration ("PT1H2M3.5S") in seconds; 0 when it is empty or not one. */
+        static double seconds(String iso) {
+            java.util.regex.Matcher m = Pattern.compile("P(?:(\\d+)Y)?(?:(\\d+)M)?(?:(\\d+(?:\\.\\d+)?)D)?(?:T(?:(\\d+(?:\\.\\d+)?)H)?(?:(\\d+(?:\\.\\d+)?)M)?(?:(\\d+(?:\\.\\d+)?)S)?)?").matcher(iso == null ? "" : iso.trim());
+            if (!m.matches()) return 0;
+            double[] unit = {31536000, 2592000, 86400, 3600, 60, 1};
+            double s = 0;
+            for (int i = 0; i < unit.length; i++) if (m.group(i + 1) != null) s += Double.parseDouble(m.group(i + 1)) * unit[i];
+            return s;
+        }
+
+        private static long number(String s) {
+            try { return s == null || s.isEmpty() ? 0 : (long) Double.parseDouble(s.trim()); } catch (NumberFormatException e) { return 0; }
+        }
+
+        /** The first of the templates that has the attribute. */
+        private static String from(List<org.w3c.dom.Element> templates, String name) {
+            for (org.w3c.dom.Element e : templates) if (!e.getAttribute(name).isEmpty()) return e.getAttribute(name);
+            return "";
+        }
+
+        private static String either(org.w3c.dom.Element rep, org.w3c.dom.Element set, String name) {
+            return !rep.getAttribute(name).isEmpty() ? rep.getAttribute(name) : set.getAttribute(name);
+        }
+
+        private static String baseUrl(org.w3c.dom.Element e, String parent) throws IOException {
+            List<org.w3c.dom.Element> b = kids(e, "BaseURL");
+            return b.isEmpty() || b.get(0).getTextContent().trim().isEmpty() ? parent : Hls.resolve(parent, b.get(0).getTextContent().trim());
+        }
+
+        private static List<org.w3c.dom.Element> kids(org.w3c.dom.Element e, String name) {
+            List<org.w3c.dom.Element> out = new ArrayList<>();
+            for (org.w3c.dom.Node n = e.getFirstChild(); n != null; n = n.getNextSibling())
+                if (n instanceof org.w3c.dom.Element && n.getNodeName().replaceFirst(".*:", "").equals(name)) out.add((org.w3c.dom.Element) n);
+            return out;
+        }
     }
 
     /** Sample times on one continuous timeline. */
@@ -948,7 +1235,7 @@ final class Downloads {
     }
 
     private static byte[] segment(Item it, Seg s, Map<String, byte[]> keys) throws Exception {
-        byte[] data = get(it, s.url);
+        byte[] data = get(it, s.url, s.from, s.len);
         if (s.key == null) return data;
         byte[] key = keys.get(s.key);
         if (key == null) { key = get(it, s.key); keys.put(s.key, key); }
@@ -1033,26 +1320,9 @@ final class Downloads {
         return 0;
     }
 
-    private static byte[] ivFromNumber(long n) {
-        byte[] iv = new byte[16];
-        for (int i = 15; i >= 8; i--) { iv[i] = (byte) n; n >>= 8; }
-        return iv;
-    }
-
-    private static byte[] ivFromHex(String hex) {
-        if (hex == null) return null;
-        hex = hex.replaceFirst("^0[xX]", "");
-        while (hex.length() < 32) hex = "0" + hex;
-        byte[] iv = new byte[16];
-        for (int i = 0; i < 16; i++) iv[i] = (byte) Integer.parseInt(hex.substring(i * 2, i * 2 + 2), 16);
-        return iv;
-    }
 
 
-    private static String resolve(String base, String ref) throws IOException {
-        if (ref == null) throw new IOException("a playlist line without an address");
-        return new URL(new URL(base), ref).toString();
-    }
+
 
     // ---- Requests ----
 
@@ -1098,14 +1368,20 @@ final class Downloads {
 
     /** A whole small resource (a segment, a key), tried again a few times. */
     private static byte[] get(Item it, String url) throws IOException {
+        return get(it, url, -1, 0);
+    }
+
+    /** A whole resource, or `len` bytes of it from `from`: a piece of an HLS or DASH stream that is a range of a bigger file. */
+    private static byte[] get(Item it, String url, long from, long len) throws IOException {
         IOException last = null;
         for (int attempt = 0; attempt < 5; attempt++) {
             if (it.stop) throw new Stopped();
             HttpURLConnection c = null;
             try {
-                c = connect(it, url, -1, -1);
+                c = connect(it, url, from, from >= 0 ? from + len - 1 : -1);
                 int code = c.getResponseCode();
-                if (code != 200 && code != 206) throw new IOException("HTTP " + code);
+                if (from >= 0 ? code != 206 : code != 200 && code != 206)   // a server that ignores the range sends the whole file: not read into memory
+                    throw new IOException("HTTP " + code + (from >= 0 ? " (the site does not allow ranges)" : ""));
                 ByteArrayOutputStream out = new ByteArrayOutputStream();
                 byte[] b = new byte[65536];
                 int n;
