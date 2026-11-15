@@ -217,6 +217,7 @@ final class Downloads {
     static final class Plan {
         String ext = "ts";
         int height;
+        String error;   // why it cannot be downloaded (no sound, live, protected): said instead of the question, nothing is started
     }
 
     /** Looks at the stream's playlists (a request or two): so the file name and extension shown for confirmation are the ones that will be written. Call off the main thread. */
@@ -231,17 +232,28 @@ final class Downloads {
             String text = fetchText(look, url);
             if (dash || text.contains("<MPD")) {
                 p.ext = "mp4";
-                p.height = Dash.pick(text, url).height;
+                Dash.Pick d = Dash.pick(text, url);
+                p.height = d.height;
+                if (d.audio == null && !hasSound(look, d.video)) p.error = App.t(R.string.dl_no_sound);
                 return p;
             }
             if (!text.startsWith("#EXTM3U")) return p;
             p.ext = "mp4";   // every playlist ends as an MP4: fMP4 pieces put together, picture and sound joined, MPEG-TS pieces converted
+            String base = url;
             if (text.contains("#EXT-X-STREAM-INF")) {
                 String[] best = Hls.bestVariant(text);
-                if (best != null) p.height = Integer.parseInt(best[1]);
+                if (best == null) return p;
+                p.height = Integer.parseInt(best[1]);
+                if (audioUri(text, best[2]) != null) return p;   // the sound is a playlist of its own
+                if (best[3] != null && !Hls.audible(best[3])) { p.error = App.t(R.string.dl_no_sound); return p; }   // the playlist says what is inside
+                base = Hls.resolve(url, best[0]);
+                text = fetchText(look, base);
             }
-        } catch (IOException | RuntimeException e) {
-            Log.w(TAG, "plan " + url, e);
+            if (!hasSound(look, Hls.track(text, base))) p.error = App.t(R.string.dl_no_sound);
+        } catch (Refused e) {
+            p.error = App.t(e.res);   // live, protected: said at once
+        } catch (Exception e) {
+            Log.w(TAG, "plan " + url, e);   // not known: the download itself says what goes wrong
         }
         return p;
     }
@@ -503,6 +515,16 @@ final class Downloads {
         fetchTracks(it, vt, at);
     }
 
+    /**
+     * Whether the picture's own pieces carry sound: the init segment of fMP4 has a sound track, or the stream table at the start of the first
+     * MPEG-TS piece lists one. True when it cannot be told (one whole file, an unreadable start): only a stream known to be silent is refused.
+     */
+    private static boolean hasSound(Item it, Track vt) throws Exception {
+        if (vt.whole) return true;
+        if (vt.map != null) return Hls.mp4Audible(get(it, vt.map, vt.mapFrom, vt.mapLen));
+        return Hls.tsAudible(segment(it, vt.segs.get(0), new ConcurrentHashMap<>()));
+    }
+
     static final long CHUNK = 1L << 20;   // small: up to connections() * 2 pieces wait in memory per download, on TVs with a small heap
 
     /** A track that is one whole file is cut into ranges of 1 MB, so it is fetched ahead, written in order and resumed like the pieces of a playlist. */
@@ -552,6 +574,7 @@ final class Downloads {
         it.asegs = at == null ? 0 : at.segs.size();
         // fMP4 pieces put back to back are one MP4. MPEG-TS pieces make a .ts, which has no seek table (a player works the length out from
         // timestamps, and a stream with odd ones gets no seek bar): written as the .ts, then made into an MP4 the way Make seekable does it
+        if (at == null && it.segDone == 0 && !hasSound(it, vt)) throw new Refused(R.string.dl_no_sound);   // a picture with no sound is not downloaded
         boolean ts = at == null && vt.ts;
         File vfile = tmp(it, "v");
         it.ext = ts ? "ts" : "mp4";
@@ -794,6 +817,50 @@ final class Downloads {
 
     /** Reading a playlist (a class of its own so a test can use it without the rest of the download manager). */
     static final class Hls {
+        /** Whether a CODECS list names a sound ("avc1.64001f,mp4a.40.2" does, "avc1.64001f" does not). */
+        static boolean audible(String codecs) {
+            return codecs.matches("(?i).*(mp4a|ac-3|ec-3|ac-4|opus|mp3|dts|flac|alac|mha1|mhm1|vorbis).*");
+        }
+
+        /** Whether an MP4 init segment (its moov) has a sound track: a "hdlr" box whose handler is "soun". */
+        static boolean mp4Audible(byte[] d) {
+            for (int i = 0; i + 16 <= d.length; i++)
+                if (d[i] == 'h' && d[i + 1] == 'd' && d[i + 2] == 'l' && d[i + 3] == 'r' && d[i + 12] == 's' && d[i + 13] == 'o' && d[i + 14] == 'u' && d[i + 15] == 'n') return true;
+            return false;
+        }
+
+        /**
+         * Whether the stream table (PAT, then PMT) at the start of an MPEG-TS piece lists a sound stream. True when no table can be read whole
+         * from one packet: only a stream known to be silent counts as silent.
+         */
+        static boolean tsAudible(byte[] d) {
+            int first = 0;
+            while (first + 188 < d.length && !(d[first] == 0x47 && d[first + 188] == 0x47)) first++;   // a piece can start with junk
+            int pmt = -1;
+            for (int p = first; p + 188 <= d.length; p += 188) {
+                if (d[p] != 0x47) return true;
+                int pid = ((d[p + 1] & 0x1F) << 8) | (d[p + 2] & 0xFF), afc = (d[p + 3] >> 4) & 3, q = p + 4;
+                if ((d[p + 1] & 0x40) == 0 || afc == 2) continue;   // not the start of a table
+                if (afc == 3) q += 1 + (d[q] & 0xFF);
+                if (q >= p + 188) continue;
+                q += 1 + (d[q] & 0xFF);   // pointer field
+                if (q + 12 > p + 188) continue;
+                int end = q + 3 + (((d[q + 1] & 0x0F) << 8) | (d[q + 2] & 0xFF)) - 4;   // the section, without its CRC
+                if (end > p + 188) return true;   // a table across packets: not read
+                if (pid == 0 && pmt < 0 && d[q] == 0) {
+                    for (int e = q + 8; e + 4 <= end; e += 4)
+                        if ((((d[e] & 0xFF) << 8) | (d[e + 1] & 0xFF)) != 0) { pmt = ((d[e + 2] & 0x1F) << 8) | (d[e + 3] & 0xFF); break; }
+                } else if (pid == pmt && d[q] == 2) {
+                    for (int e = q + 12 + (((d[q + 10] & 0x0F) << 8) | (d[q + 11] & 0xFF)); e + 5 <= end; e += 5 + (((d[e + 3] & 0x0F) << 8) | (d[e + 4] & 0xFF))) {
+                        int type = d[e] & 0xFF;   // MPEG audio, AAC (ADTS, LATM), AC-3, E-AC-3, DTS..., and "private" (DVB puts AC-3 there)
+                        if (type == 0x03 || type == 0x04 || type == 0x0F || type == 0x11 || type == 0x06 || (type >= 0x80 && type <= 0x87)) return true;
+                    }
+                    return false;
+                }
+            }
+            return true;
+        }
+
         static byte[] ivFromNumber(long n) {
             byte[] iv = new byte[16];
             for (int i = 15; i >= 8; i--) { iv[i] = (byte) n; n >>= 8; }
@@ -887,10 +954,10 @@ final class Downloads {
     /**
      * The highest-bandwidth variant of a main playlist whose sound an MP4 can hold (not AC-3, E-AC-3, AC-4 or DTS: the top variant is often one
      * of those, and the picture and sound could not be joined); when every variant has such sound, the highest. {its address as written, its
-     * picture height or "0", its audio group or null}. Null when there is none.
+     * picture height or "0", its audio group or null, its CODECS or null}. Null when there is none.
      */
     static String[] bestVariant(String text) {
-        String best = null, group = null, any = null, anyGroup = null;
+        String best = null, group = null, any = null, anyGroup = null, bestCodecs = null, anyCodecs = null;
         long bw = -1, anyBw = -1;
         int height = 0, anyHeight = 0;
         String[] lines = text.split("\\r?\\n");
@@ -904,13 +971,13 @@ final class Downloads {
             int h = 0;
             String r = attr(lines[i], "RESOLUTION");   // 1920x1080
             if (r != null && r.contains("x")) try { h = Integer.parseInt(r.substring(r.indexOf('x') + 1).trim()); } catch (NumberFormatException ignored) { }
-            if (bandwidth > anyBw) { anyBw = bandwidth; any = uri; anyGroup = attr(lines[i], "AUDIO"); anyHeight = h; }
             String codecs = attr(lines[i], "CODECS");
+            if (bandwidth > anyBw) { anyBw = bandwidth; any = uri; anyGroup = attr(lines[i], "AUDIO"); anyHeight = h; anyCodecs = codecs; }
             boolean fits = codecs == null || !codecs.matches("(?i).*(ac-3|ec-3|ac-4|dts|mlpa).*");
-            if (fits && bandwidth > bw) { bw = bandwidth; best = uri; group = attr(lines[i], "AUDIO"); height = h; }
+            if (fits && bandwidth > bw) { bw = bandwidth; best = uri; group = attr(lines[i], "AUDIO"); height = h; bestCodecs = codecs; }
         }
-        if (best == null) { best = any; group = anyGroup; height = anyHeight; }
-        return best == null ? null : new String[]{best, String.valueOf(height), group};
+        if (best == null) { best = any; group = anyGroup; height = anyHeight; bestCodecs = anyCodecs; }
+        return best == null ? null : new String[]{best, String.valueOf(height), group, bestCodecs};
     }
     }
 

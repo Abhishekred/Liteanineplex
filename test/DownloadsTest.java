@@ -9,6 +9,12 @@ public class DownloadsTest {
         if (!String.valueOf(got).equals(String.valueOf(want))) { fails++; System.out.println("FAIL " + name + ": got " + got + " want " + want); }
     }
 
+    static byte[] cat(byte[] a, byte[] b) {
+        byte[] out = java.util.Arrays.copyOf(a, a.length + b.length);
+        System.arraycopy(b, 0, out, a.length, b.length);
+        return out;
+    }
+
     public static void main(String[] a) {
         long[] last = {Long.MIN_VALUE, Long.MIN_VALUE}, shift = {0, 0};
         long t = 0;
@@ -101,9 +107,21 @@ public class DownloadsTest {
             + "#EXT-X-STREAM-INF:BANDWIDTH=8000000,CODECS=\"avc1.64002a,mp4a.40.2\",RESOLUTION=1920x1080,AUDIO=\"aud1\"\nhigh.m3u8\n"
             + "#EXT-X-STREAM-INF:BANDWIDTH=8200000,CODECS=\"avc1.64002a,ac-3\",RESOLUTION=1920x1080,AUDIO=\"aud2\"\nac3.m3u8\n"
             + "#EXT-X-STREAM-INF:BANDWIDTH=8300000,CODECS=\"avc1.64002a,ec-3\",RESOLUTION=1920x1080,AUDIO=\"aud3\"\nec3.m3u8\n";
-        check("AAC variant over a higher AC-3 one", java.util.Arrays.toString(Downloads.Hls.bestVariant(master)), "[high.m3u8, 1080, aud1]");
-        check("only AC-3: still the highest", java.util.Arrays.toString(Downloads.Hls.bestVariant(master.replace("mp4a.40.2", "ac-3"))), "[ec3.m3u8, 1080, aud3]");
+        check("AAC variant over a higher AC-3 one", java.util.Arrays.toString(Downloads.Hls.bestVariant(master)), "[high.m3u8, 1080, aud1, avc1.64002a,mp4a.40.2]");
+        check("only AC-3: still the highest", java.util.Arrays.toString(Downloads.Hls.bestVariant(master.replace("mp4a.40.2", "ac-3"))), "[ec3.m3u8, 1080, aud3, avc1.64002a,ec-3]");
         check("no variants", Downloads.Hls.bestVariant("#EXTM3U\n"), null);
+        // a stream with no sound is not downloaded: told from CODECS, an fMP4 init segment, or the stream table of a TS piece
+        check("codecs with sound", Downloads.Hls.audible("avc1.64001f,mp4a.40.2"), true);
+        check("codecs without", Downloads.Hls.audible("avc1.64001f"), false);
+        try {
+            java.nio.file.Path f = java.nio.file.Paths.get("test/fixtures");
+            check("TS with sound", Downloads.Hls.tsAudible(java.nio.file.Files.readAllBytes(f.resolve("head-av.ts"))), true);
+            check("TS without", Downloads.Hls.tsAudible(java.nio.file.Files.readAllBytes(f.resolve("head-video.ts"))), false);
+            check("junk before a TS with sound", Downloads.Hls.tsAudible(cat(new byte[]{1, 2, 3}, java.nio.file.Files.readAllBytes(f.resolve("head-av.ts")))), true);
+            check("not TS: not refused", Downloads.Hls.tsAudible(new byte[4000]), true);
+            check("fMP4 with sound", Downloads.Hls.mp4Audible(java.nio.file.Files.readAllBytes(f.resolve("init-av.mp4"))), true);
+            check("fMP4 without", Downloads.Hls.mp4Audible(java.nio.file.Files.readAllBytes(f.resolve("init-video.mp4"))), false);
+        } catch (java.io.IOException e) { fails++; System.out.println("FAIL fixtures: " + e); }
         System.out.println(fails == 0 ? "all passed" : fails + " failed");
         if (fails > 0) System.exit(1);
     }

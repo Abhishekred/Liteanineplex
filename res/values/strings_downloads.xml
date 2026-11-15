@@ -48,4 +48,5 @@
     <string name="dl_dash_pieces">Download cannot find the pieces of this DASH stream</string>
     <string name="dl_no_space">There is not enough free space to make an MP4 of it (it needs about %1$s)</string>
     <string name="dl_dash_periods">This DASH stream comes in several parts (periods), which Download cannot join yet</string>
+    <string name="dl_no_sound">This stream has no sound, so it is not downloaded</string>
 </resources>

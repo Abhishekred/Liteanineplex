@@ -1367,10 +1367,15 @@ public class PlayerActivity extends Activity {
     }
 
     void say(String s) {
+        say(s, 1200);
+    }
+
+    /** A notice for `ms`: a reason (why a download is not started) needs time to be read. */
+    void say(String s, long ms) {
         notice.setText(s);
         notice.setVisibility(View.VISIBLE);
         App.main.removeCallbacks(hideNotice);
-        App.main.postDelayed(hideNotice, 1200);
+        App.main.postDelayed(hideNotice, ms);
     }
 
     final Runnable hideNotice = () -> notice.setVisibility(View.GONE);
@@ -1821,7 +1826,7 @@ public class PlayerActivity extends Activity {
         App.io.execute(() -> {
             Downloads.Plan plan = Downloads.plan(url, headers, dash);
             if (plan.height == 0) plan.height = playing;
-            runOnUiThread(() -> showConfirm(base, plan, null));
+            runOnUiThread(() -> { if (plan.error != null) say(plan.error, 4000); else showConfirm(base, plan, null); });   // nothing is started for a stream that cannot be saved
         });
     }
 
