@@ -55,6 +55,10 @@ warp/build.sh   # WARP helper (Go, Android NDK)
 
 Details in the [build guide](https://anantplay.github.io/android/build.html).
 
+## Support
+
+AnantPlay is free and made in spare time. If it is useful to you: [Buy me a coffee](https://buymeacoffee.com/rohit267) or [PayPal](https://paypal.me/champdev).
+
 ## Legal
 
 AnantPlay is a browser and a media player. It hosts no video and ships no list of streams; the sources you add and what they serve belong to third parties, and what you watch is your responsibility. Components and data sources are listed in [THIRD_PARTY.md](THIRD_PARTY.md).
