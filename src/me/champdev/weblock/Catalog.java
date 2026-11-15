@@ -60,6 +60,7 @@ final class Catalog {
     /** One catalog page. type = movie|series; extra = "" | "genre=Comedy" | "skip=50" | "search=text". Null when offline with nothing cached. */
     static List<Title> list(String type, String extra) {
         if (extra.startsWith("local=")) return local(type, extra.substring(6), false);
+        if (extra.startsWith("rank=")) return rank(type, extra.substring(5), false);
         if (extra.startsWith("genre=" + LANG)) return language(type, extra.substring(6 + LANG.length()), false);
         if (extra.equals(NEW_ANIME)) return newAnime(false);
         if (extra.equals(TRENDING_ANIME)) return kitsu("kitsu-anime-trending", new int[]{0}, 0, false);
@@ -233,6 +234,28 @@ final class Catalog {
         return any ? new ArrayList<>(out.values()) : null;
     }
 
+    /** Our own per-language lists, built weekly by the scraper repo's job: a file per language with trending and popular titles. */
+    static final String LANGUAGE_FILES = "https://raw.githubusercontent.com/AnantPlay/scraper/main/languages/";
+
+    /** A language's Trending or Popular row. `spec` = "trending:Hindi" or "popular:Hindi". Null when the file is not here (yet) or the row is empty. */
+    static List<Title> rank(String type, String spec, boolean diskOnly) {
+        String[] parts = spec.split(":", 2);
+        try {
+            String url = LANGUAGE_FILES + java.net.URLEncoder.encode(parts[1], "UTF-8").replace("+", "%20") + ".json";
+            String text = diskOnly ? disk(url) : get(url, true);
+            JSONArray a = text == null ? null : new JSONObject(text).getJSONObject(type).optJSONArray(parts[0]);
+            if (a == null || a.length() == 0) return null;
+            List<Title> out = new ArrayList<>();
+            for (int i = 0; i < a.length(); i++) {
+                Title t = brandTitle(a.getJSONObject(i));
+                if (t != null) out.add(t);
+            }
+            return out;
+        } catch (java.io.UnsupportedEncodingException | JSONException e) {
+            return null;
+        }
+    }
+
     /** The TMDB addon's titles under their IMDb ids (from each one's IMDb link), so title pages, subtitles and site links work as for Cinemeta's. */
     static List<Title> parseTmdb(String json, String type) {
         List<Title> out = new ArrayList<>();
@@ -284,6 +307,7 @@ final class Catalog {
 
     static List<Title> fromDisk(String type, String extra) {
         if (extra.startsWith("local=")) return local(type, extra.substring(6), true);
+        if (extra.startsWith("rank=")) return rank(type, extra.substring(5), true);
         if (extra.startsWith("genre=" + LANG)) return language(type, extra.substring(6 + LANG.length()), true);
         if (extra.equals(NEW_ANIME)) return newAnime(true);
         if (extra.equals(TRENDING_ANIME)) return kitsu("kitsu-anime-trending", new int[]{0}, 0, true);
@@ -564,25 +588,30 @@ final class Catalog {
                 }
                 JSONArray titles = o.optJSONArray("titles");
                 for (int j = 0; titles != null && j < titles.length(); j++) {
-                    JSONObject x = titles.getJSONObject(j);
-                    Title t = new Title();
-                    t.id = x.optString("id");
-                    t.type = x.optString("type").equals("series") ? "series" : "movie";
-                    t.name = x.optString("name");
-                    t.year = x.optString("year");
-                    t.poster = x.optString("poster");
-                    t.tmdb = x.optString("tmdb");
-                    t.rating = x.optString("rating");
-                    t.pop = (float) x.optDouble("pop", 0);
-                    t.votes = x.optInt("votes");
-                    JSONArray tags = x.optJSONArray("tags");
-                    if (tags != null) t.tags = tags.join(" ").replace("\"", "");
-                    if (t.id.startsWith("tt") && !t.name.isEmpty()) b.titles.add(t);
+                    Title t = brandTitle(titles.getJSONObject(j));
+                    if (t != null) b.titles.add(t);
                 }
                 if (!b.id.isEmpty() && !b.name.isEmpty() && !b.titles.isEmpty()) out.add(b);
             }
         } catch (JSONException ignored) { }
         return out;
+    }
+
+    /** One title of the scraper's files (collections.json, languages/*.json); null without an IMDb id or a name. */
+    static Title brandTitle(JSONObject x) throws JSONException {
+        Title t = new Title();
+        t.id = x.optString("id");
+        t.type = x.optString("type").equals("series") ? "series" : "movie";
+        t.name = x.optString("name");
+        t.year = x.optString("year");
+        t.poster = x.optString("poster");
+        t.tmdb = x.optString("tmdb");
+        t.rating = x.optString("rating");
+        t.pop = (float) x.optDouble("pop", 0);
+        t.votes = x.optInt("votes");
+        JSONArray tags = x.optJSONArray("tags");
+        if (tags != null) t.tags = tags.join(" ").replace("\"", "");
+        return t.id.startsWith("tt") && !t.name.isEmpty() ? t : null;
     }
 
     // ---- My list ----

@@ -257,8 +257,10 @@ public class Home extends Activity {
         if (firstCard == null) firstCard = first;
         if (!focusFirst) return;
         focusFirst = false;
-        if (!inside(getCurrentFocus(), col)) { firstCard.requestFocus(); col.setFocusable(false); }
+        if (!inside(getCurrentFocus(), col)) { firstCard.requestFocus(); autoFocus = firstCard; col.setFocusable(false); }
     }
+
+    View autoFocus;   // the card focusContent chose: a row that turns up above it takes the focus while the remote has not moved
 
     static boolean inside(View v, View root) {
         for (android.view.ViewParent p = v == null ? null : v.getParent(); p != null; p = p.getParent()) if (p == root) return true;
@@ -1013,7 +1015,7 @@ public class Home extends Activity {
         col.addView(h);
         LinearLayout row = row();
         final int id = built;
-        boolean local = extra.startsWith("local=");   // a bonus row: gone when its source is down, no error line
+        boolean local = extra.startsWith("local=") || extra.startsWith("rank=");   // a bonus row: gone when its source is down, no error line
         List<Catalog.Title> hit = Catalog.cached(type, extra);
         if (hit != null && !(local && hit.isEmpty())) { fillPosters(row, hit, extra, moreTab); return; }
         skeleton(row, posterW());
@@ -1099,6 +1101,13 @@ public class Home extends Activity {
 
     /** `extra` "genre=X": More opens the tab on that genre chip. moreTab -1: no More (the row is on that tab already). */
     void fillPosters(LinearLayout row, List<Catalog.Title> list, String extra, int moreTab) {
+        if (extra.startsWith("rank=")) {   // a language's Trending or Popular: 15 and a More that opens all of it as a grid
+            String[] r = extra.substring(5).split(":", 2);
+            posterRow(row, App.t(r[0].equals("trending") ? R.string.home_trending : r[0].equals("new") ? R.string.home_new : R.string.home_popular) + "  " + r[1], list);
+            View top = row.getChildAt(0);
+            if (App.tv && top != null && autoFocus != null && getCurrentFocus() == autoFocus) { top.requestFocus(); autoFocus = top; }
+            return;
+        }
         for (Catalog.Title t : list.subList(0, Math.min(14, list.size()))) row.addView(posterCard(t, posterW()));
         if (moreTab < 0) return;
         row.addView(moreCard(v -> {
@@ -1143,11 +1152,20 @@ public class Home extends Activity {
         if (fixedGenre.isEmpty()) platformRow(type);
         // The chips say which list this is; only the Anime tab has one fixed list, under its own heading
         col.addView(fixedGenre.isEmpty() ? genreChips() : heading(App.t(R.string.home_popular_animation)));
+        if (genre.startsWith(Catalog.LANG)) languageRows(type, genre.substring(Catalog.LANG.length()));
         LinearLayout holder = new LinearLayout(this);
         holder.setOrientation(LinearLayout.VERTICAL);
         col.addView(holder);
         loadPage(type, genre, 0, holder, new Grid(holder, posterCols()), built);
         focusFirst = App.tv && firstCard == null && !skipFocus;   // the list is not here yet: showPage hands the remote over
+    }
+
+    /** Under a language's chip: its Trending, Popular and New rows (left out while the scraper's file is not there), then All, the full list below. */
+    void languageRows(String type, String language) {
+        titleRow(App.t(R.string.home_trending), language, type, "rank=trending:" + language, -1);
+        titleRow(App.t(R.string.home_popular), language, type, "rank=popular:" + language, -1);
+        titleRow(App.t(R.string.home_new), language, type, "rank=new:" + language, -1);
+        col.addView(heading(App.t(R.string.home_all), language));
     }
 
     /** What Movies and TV open on: the viewer's own first language when their country has lists, else New. */
