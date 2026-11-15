@@ -25,3 +25,4 @@ Only the current version is kept here: each `vX.Y.Z` tag publishes the TV and An
 - Crop looked like Stretch on some TVs.
 - Downloads no longer need twice the free space, and a big on-demand download no longer runs out of memory on small TVs.
 - Movies and TV no longer open with the remote on the second row.
+- On a phone, the Home banner picture no longer spills over the row under it.

@@ -642,6 +642,7 @@ public class Home extends Activity {
         FrameLayout box = heroBox;
         ImageView old = heroImg, next = new ImageView(this);
         next.setScaleType(ImageView.ScaleType.CENTER_CROP);
+        next.setCropToPadding(true);   // the box lets its children draw past it (the play button's ring): the cropped picture must not, or it covers the row below
         if (heroPending != null) box.removeView(heroPending);   // a picture that never came: it is not waited for any more
         if (old != null) next.setAlpha(0f);
         heroPending = next;
