@@ -46,4 +46,5 @@
     <string name="dl_ts_hint">A .ts file: a player may not know its length. The button makes it an MP4 you can seek in.</string>
     <string name="dl_ts_kept">Kept as .ts: %1$s</string>
     <string name="dl_converting">Making an MP4…</string>
+    <string name="dl_byterange">This stream keeps all its pieces in one file (byte ranges), which Download cannot take apart yet</string>
 </resources>

@@ -28,6 +28,14 @@ public class DownloadsTest {
         last[1] = s;
         s = Downloads.Timeline.on(200_000_000L, last, shift, 1);
         check("a jump forward closes up", s, 100_000_000L + Downloads.Timeline.STEP);
+        // the best variant is the highest one whose sound an MP4 can hold
+        String master = "#EXTM3U\n#EXT-X-STREAM-INF:BANDWIDTH=2000000,CODECS=\"avc1.640020,mp4a.40.2\",RESOLUTION=960x540,AUDIO=\"aud1\"\nlow.m3u8\n"
+            + "#EXT-X-STREAM-INF:BANDWIDTH=8000000,CODECS=\"avc1.64002a,mp4a.40.2\",RESOLUTION=1920x1080,AUDIO=\"aud1\"\nhigh.m3u8\n"
+            + "#EXT-X-STREAM-INF:BANDWIDTH=8200000,CODECS=\"avc1.64002a,ac-3\",RESOLUTION=1920x1080,AUDIO=\"aud2\"\nac3.m3u8\n"
+            + "#EXT-X-STREAM-INF:BANDWIDTH=8300000,CODECS=\"avc1.64002a,ec-3\",RESOLUTION=1920x1080,AUDIO=\"aud3\"\nec3.m3u8\n";
+        check("AAC variant over a higher AC-3 one", java.util.Arrays.toString(Downloads.Hls.bestVariant(master)), "[high.m3u8, 1080, aud1]");
+        check("only AC-3: still the highest", java.util.Arrays.toString(Downloads.Hls.bestVariant(master.replace("mp4a.40.2", "ac-3"))), "[ec3.m3u8, 1080, aud3]");
+        check("no variants", Downloads.Hls.bestVariant("#EXTM3U\n"), null);
         System.out.println(fails == 0 ? "all passed" : fails + " failed");
         if (fails > 0) System.exit(1);
     }

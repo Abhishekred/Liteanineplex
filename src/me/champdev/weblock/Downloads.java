@@ -226,7 +226,7 @@ final class Downloads {
             if (!text.startsWith("#EXTM3U")) return p;
             p.ext = "mp4";   // every playlist ends as an MP4: fMP4 pieces put together, picture and sound joined, MPEG-TS pieces converted
             if (text.contains("#EXT-X-STREAM-INF")) {
-                String[] best = bestVariant(text);
+                String[] best = Hls.bestVariant(text);
                 if (best != null) p.height = Integer.parseInt(best[1]);
             }
         } catch (IOException | RuntimeException e) {
@@ -476,7 +476,7 @@ final class Downloads {
         if (!text.startsWith("#EXTM3U")) { it.kind = "file"; file(it); return; }   // not a playlist after all: a plain file
         String base = it.url, audioUrl = null;
         if (text.contains("#EXT-X-STREAM-INF")) {   // the main playlist: the best quality
-            String[] best = bestVariant(text);
+            String[] best = Hls.bestVariant(text);
             if (best == null) throw new IOException("an empty playlist");
             String au = audioUri(text, best[2]);   // the sound in a playlist of its own, not in the pieces of the picture
             if (au != null) audioUrl = resolve(base, au);
@@ -590,18 +590,20 @@ final class Downloads {
             } else if (l.startsWith("#EXT-X-MEDIA-SEQUENCE:")) {
                 try { seq = Long.parseLong(l.substring(22).trim()); } catch (NumberFormatException ignored) { }
             } else if (l.startsWith("#EXT-X-KEY:")) {
-                String method = attr(l, "METHOD");
+                String method = Hls.attr(l, "METHOD");
                 if ("AES-128".equals(method)) {
                     aes = true;
-                    keyUri = resolve(base, attr(l, "URI"));
-                    keyIv = ivFromHex(attr(l, "IV"));
+                    keyUri = resolve(base, Hls.attr(l, "URI"));
+                    keyIv = ivFromHex(Hls.attr(l, "IV"));
                 } else if ("NONE".equals(method)) {
                     aes = false;
                 } else {
                     throw new IOException(App.t(R.string.dl_protected));
                 }
+            } else if (l.startsWith("#EXT-X-BYTERANGE:") || (l.startsWith("#EXT-X-MAP:") && Hls.attr(l, "BYTERANGE") != null)) {
+                throw new IOException(App.t(R.string.dl_byterange));   // all the pieces in one file: taking it for the init segment would read the whole file into memory
             } else if (l.startsWith("#EXT-X-MAP:")) {
-                if (t.map == null) t.map = resolve(base, attr(l, "URI"));
+                if (t.map == null) t.map = resolve(base, Hls.attr(l, "URI"));
             } else if (l.charAt(0) != '#') {
                 Seg s = new Seg();
                 s.url = resolve(base, l);
@@ -615,39 +617,16 @@ final class Downloads {
         return t;
     }
 
-    /** The highest-bandwidth variant of a main playlist: {its address as written, its picture height or "0", its audio group or null}. Null when there is none. */
-    private static String[] bestVariant(String text) {
-        String best = null, group = null;
-        long bw = -1;
-        int height = 0;
-        String[] lines = text.split("\\r?\\n");
-        for (int i = 0; i < lines.length; i++) {
-            if (!lines[i].startsWith("#EXT-X-STREAM-INF")) continue;
-            long bandwidth = 0;
-            try { bandwidth = Long.parseLong(String.valueOf(attr(lines[i], "BANDWIDTH")).trim()); } catch (NumberFormatException ignored) { }
-            String uri = null;
-            for (int k = i + 1; k < lines.length && uri == null; k++) if (!lines[k].trim().isEmpty() && !lines[k].startsWith("#")) uri = lines[k].trim();
-            if (uri == null || bandwidth <= bw) continue;
-            bw = bandwidth;
-            best = uri;
-            group = attr(lines[i], "AUDIO");
-            String r = attr(lines[i], "RESOLUTION");   // 1920x1080
-            height = 0;
-            if (r != null && r.contains("x")) try { height = Integer.parseInt(r.substring(r.indexOf('x') + 1).trim()); } catch (NumberFormatException ignored) { }
-        }
-        return best == null ? null : new String[]{best, String.valueOf(height), group};
-    }
-
     /** The address (as written) of the audio playlist of a group in a main playlist: the default one, else the first. Null when the sound is in the picture's own pieces. */
     private static String audioUri(String text, String group) {
         if (group == null) return null;
         String first = null;
         for (String raw : text.split("\\r?\\n")) {
             String l = raw.trim();
-            if (!l.startsWith("#EXT-X-MEDIA:") || !"AUDIO".equals(attr(l, "TYPE")) || !group.equals(attr(l, "GROUP-ID"))) continue;
-            String uri = attr(l, "URI");
+            if (!l.startsWith("#EXT-X-MEDIA:") || !"AUDIO".equals(Hls.attr(l, "TYPE")) || !group.equals(Hls.attr(l, "GROUP-ID"))) continue;
+            String uri = Hls.attr(l, "URI");
             if (uri == null) continue;
-            if ("YES".equalsIgnoreCase(attr(l, "DEFAULT"))) return uri;
+            if ("YES".equalsIgnoreCase(Hls.attr(l, "DEFAULT"))) return uri;
             if (first == null) first = uri;
         }
         return first;
@@ -732,8 +711,8 @@ final class Downloads {
             if (vt < 0 || at < 0) throw new IOException(App.t(R.string.dl_merge_failed) + " (" + (vt < 0 ? "no picture" : "no sound") + " found: " + tracks(vt < 0 ? v : a) + ")");
             v.selectTrack(vt);
             a.selectTrack(at);
-            long vs = v.getSampleTime(), as = a.getSampleTime();
-            if (vs < 0 || as < 0) throw new IOException(App.t(R.string.dl_merge_failed) + " (no samples)");
+            if (v.getSampleTrackIndex() < 0 || a.getSampleTrackIndex() < 0) throw new IOException(App.t(R.string.dl_merge_failed) + " (no samples)");
+            long vs = v.getSampleTime(), as = a.getSampleTime();   // a sound can start a little before 0 (AAC's encoder delay): only "no sample" means none
             long base = Math.min(vs, as);   // both start near 0, keeping the gap between them
             out.ch.truncate(0);
             mux = new MediaMuxer(out.fd(), MediaMuxer.OutputFormat.MUXER_OUTPUT_MPEG_4);
@@ -755,11 +734,12 @@ final class Downloads {
             long[] last = {Long.MIN_VALUE, Long.MIN_VALUE}, shift = {0, 0};   // per track: the latest time, and the shift that carries it across a timestamp reset
             while (true) {
                 if (it.stop) throw new Stopped();
-                vs = v.getSampleTime();
-                as = a.getSampleTime();
-                if (vs < 0 && as < 0) break;
-                long vo = vs < 0 ? -1 : Timeline.on(vs, last, shift, 0), ao = as < 0 ? -1 : Timeline.on(as, last, shift, 1);
-                boolean pic = ao < 0 || (vo >= 0 && vo <= ao);
+                boolean hasV = v.getSampleTrackIndex() >= 0, hasA = a.getSampleTrackIndex() >= 0;
+                if (!hasV && !hasA) break;
+                vs = hasV ? v.getSampleTime() : 0;
+                as = hasA ? a.getSampleTime() : 0;
+                long vo = hasV ? Timeline.on(vs, last, shift, 0) : 0, ao = hasA ? Timeline.on(as, last, shift, 1) : 0;
+                boolean pic = !hasA || (hasV && vo <= ao);
                 MediaExtractor e = pic ? v : a;
                 buf.clear();
                 int n = e.readSampleData(buf, 0);
@@ -790,6 +770,44 @@ final class Downloads {
             if (mux != null) mux.release();
             out.close();
         }
+    }
+
+    /** Reading a playlist (a class of its own so a test can use it without the rest of the download manager). */
+    static final class Hls {
+    /** One attribute of a playlist tag line: KEY=value or KEY="value". */
+    static String attr(String line, String key) {
+        Matcher m = Pattern.compile("[:,]" + key + "=(\"([^\"]*)\"|[^,]*)").matcher(line);
+        return m.find() ? (m.group(2) != null ? m.group(2) : m.group(1)) : null;
+    }
+
+    /**
+     * The highest-bandwidth variant of a main playlist whose sound an MP4 can hold (not AC-3, E-AC-3, AC-4 or DTS: the top variant is often one
+     * of those, and the picture and sound could not be joined); when every variant has such sound, the highest. {its address as written, its
+     * picture height or "0", its audio group or null}. Null when there is none.
+     */
+    static String[] bestVariant(String text) {
+        String best = null, group = null, any = null, anyGroup = null;
+        long bw = -1, anyBw = -1;
+        int height = 0, anyHeight = 0;
+        String[] lines = text.split("\\r?\\n");
+        for (int i = 0; i < lines.length; i++) {
+            if (!lines[i].startsWith("#EXT-X-STREAM-INF")) continue;
+            long bandwidth = 0;
+            try { bandwidth = Long.parseLong(String.valueOf(attr(lines[i], "BANDWIDTH")).trim()); } catch (NumberFormatException ignored) { }
+            String uri = null;
+            for (int k = i + 1; k < lines.length && uri == null; k++) if (!lines[k].trim().isEmpty() && !lines[k].startsWith("#")) uri = lines[k].trim();
+            if (uri == null) continue;
+            int h = 0;
+            String r = attr(lines[i], "RESOLUTION");   // 1920x1080
+            if (r != null && r.contains("x")) try { h = Integer.parseInt(r.substring(r.indexOf('x') + 1).trim()); } catch (NumberFormatException ignored) { }
+            if (bandwidth > anyBw) { anyBw = bandwidth; any = uri; anyGroup = attr(lines[i], "AUDIO"); anyHeight = h; }
+            String codecs = attr(lines[i], "CODECS");
+            boolean fits = codecs == null || !codecs.matches("(?i).*(ac-3|ec-3|ac-4|dts|mlpa).*");
+            if (fits && bandwidth > bw) { bw = bandwidth; best = uri; group = attr(lines[i], "AUDIO"); height = h; }
+        }
+        if (best == null) { best = any; group = anyGroup; height = anyHeight; }
+        return best == null ? null : new String[]{best, String.valueOf(height), group};
+    }
     }
 
     /** Sample times on one continuous timeline. */
@@ -1030,11 +1048,6 @@ final class Downloads {
         return iv;
     }
 
-    /** One attribute of a playlist tag line: KEY=value or KEY="value". */
-    private static String attr(String line, String key) {
-        Matcher m = Pattern.compile("[:,]" + key + "=(\"([^\"]*)\"|[^,]*)").matcher(line);
-        return m.find() ? (m.group(2) != null ? m.group(2) : m.group(1)) : null;
-    }
 
     private static String resolve(String base, String ref) throws IOException {
         if (ref == null) throw new IOException("a playlist line without an address");
