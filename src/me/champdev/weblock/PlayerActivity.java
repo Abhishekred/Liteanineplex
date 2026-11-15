@@ -1277,7 +1277,10 @@ public class PlayerActivity extends Activity {
             float k = Math.max(w / (r * (1 - 2 * Math.max(0, barX))), h / (1 - 2 * Math.max(0, barY)));   // the picture without its own black bars covers the screen
             vw = Math.round(r * k);
             vh = Math.round(k);
-        } else if (zoom != 2) {
+        } else if (zoom == 2) {   // the picture without its own black bars, pulled to the screen
+            vw = Math.round(w / (1 - 2 * Math.max(0, barX)));
+            vh = Math.round(h / (1 - 2 * Math.max(0, barY)));
+        } else {
             vh = Math.round(w / r);
             if (vh > h) { vh = h; vw = Math.round(h * r); }
         }
@@ -1286,12 +1289,12 @@ public class PlayerActivity extends Activity {
         surface.setLayoutParams(new FrameLayout.LayoutParams(vw, vh, Gravity.CENTER));
     }
 
-    float barX = -1, barY = -1;   // Fill: the share of the picture, each side, that is black bars baked into the video (a wide film in a 16:9 frame); -1 = not measured
+    float barX = -1, barY = -1;   // Fill and Stretch: the share of the picture, each side, that is black bars baked into the video (a wide film in a 16:9 frame); -1 = not measured
 
-    /** While Fill is on: a small copy of the frame every 2 s, to find those bars. The smallest seen is kept, since a dark scene shows more black than there is. */
+    /** While Fill or Stretch is on: a small copy of the frame every 2 s, to find those bars. The smallest seen is kept, since a dark scene shows more black than there is. */
     final Runnable barLoop = new Runnable() {
         @Override public void run() {
-            if (zoom != 1 || isFinishing()) return;
+            if (zoom == 0 || isFinishing()) return;
             App.main.postDelayed(this, 2000);
             if (player == null || !player.isPlaying() || surface.getWidth() == 0 || !surface.getHolder().getSurface().isValid()) return;
             android.graphics.Bitmap bmp = android.graphics.Bitmap.createBitmap(160, 90, android.graphics.Bitmap.Config.ARGB_8888);
@@ -1327,7 +1330,7 @@ public class PlayerActivity extends Activity {
 
     void cycleZoom() {
         zoom = (zoom + 1) % ZOOMS.length;
-        if (zoom == 1) { App.main.removeCallbacks(barLoop); App.main.post(barLoop); }   // it stops by itself once Fill is left
+        if (zoom != 0) { App.main.removeCallbacks(barLoop); App.main.post(barLoop); }   // it stops by itself once Fit is back
         fit();
         say(App.t(R.string.player_zoom_say, App.t(ZOOMS[zoom])));
         refreshChips();
