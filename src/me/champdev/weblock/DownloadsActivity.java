@@ -106,7 +106,7 @@ public class DownloadsActivity extends Home {
         where.setEllipsize(TextUtils.TruncateAt.END);
         if (!where.getText().toString().isEmpty()) mid.addView(where);
         if (done && it.ext.equals("ts")) {   // no seek table: what to do about it, or why that did not work
-            TextView ts = text(it.note.isEmpty() ? App.t(R.string.dl_ts_hint) : App.t(R.string.dl_ts_kept, it.note), sp(10.5f, 10), ACCENT, false);
+            TextView ts = text(it.note.isEmpty() ? App.t(R.string.dl_ts_hint) : App.t(R.string.dl_ts_kept, it.note), sp(10.5f, 10), it.note.isEmpty() ? MUTED : ACCENT, false);   // a hint, or why it did not work
             ts.setMaxLines(3);
             ts.setEllipsize(TextUtils.TruncateAt.END);
             mid.addView(ts);
