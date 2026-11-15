@@ -262,6 +262,14 @@ public class Home extends Activity {
 
     View autoFocus;   // the card focusContent chose: a row that turns up above it takes the focus while the remote has not moved
 
+    /** Whether `a` is higher on the page than `b` (rows arrive in any order; only one above may take the focus). */
+    static boolean above(View a, View b) {
+        int[] pa = new int[2], pb = new int[2];
+        a.getLocationInWindow(pa);
+        b.getLocationInWindow(pb);
+        return pa[1] < pb[1];
+    }
+
     static boolean inside(View v, View root) {
         for (android.view.ViewParent p = v == null ? null : v.getParent(); p != null; p = p.getParent()) if (p == root) return true;
         return false;
@@ -1105,7 +1113,7 @@ public class Home extends Activity {
             String[] r = extra.substring(5).split(":", 2);
             posterRow(row, App.t(r[0].equals("new") ? R.string.home_new : R.string.home_popular) + "  " + r[1], list);
             View top = row.getChildAt(0);
-            if (App.tv && top != null && autoFocus != null && getCurrentFocus() == autoFocus) { top.requestFocus(); autoFocus = top; }
+            if (App.tv && top != null && autoFocus != null && getCurrentFocus() == autoFocus && above(top, autoFocus)) { top.requestFocus(); autoFocus = top; }
             return;
         }
         for (Catalog.Title t : list.subList(0, Math.min(14, list.size()))) row.addView(posterCard(t, posterW()));
