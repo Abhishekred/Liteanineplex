@@ -503,9 +503,9 @@ final class Downloads {
         fetchTracks(it, vt, at);
     }
 
-    static final long CHUNK = 4L << 20;
+    static final long CHUNK = 1L << 20;   // small: up to connections() * 2 pieces wait in memory per download, on TVs with a small heap
 
-    /** A track that is one whole file is cut into ranges of 4 MB, so it is fetched ahead, written in order and resumed like the pieces of a playlist. */
+    /** A track that is one whole file is cut into ranges of 1 MB, so it is fetched ahead, written in order and resumed like the pieces of a playlist. */
     private static void cut(Item it, Track t) throws IOException {
         if (!t.whole) return;
         String url = t.segs.get(0).url;
@@ -1373,7 +1373,8 @@ final class Downloads {
                 int code = c.getResponseCode();
                 if (from >= 0 ? code != 206 : code != 200 && code != 206)   // a server that ignores the range sends the whole file: not read into memory
                     throw new IOException("HTTP " + code + (from >= 0 ? " (the site does not allow ranges)" : ""));
-                ByteArrayOutputStream out = new ByteArrayOutputStream();
+                long size = from >= 0 ? len : c.getContentLengthLong();   // sized up front: a growing buffer doubles and copies, twice the memory of the piece
+                ByteArrayOutputStream out = new ByteArrayOutputStream(size > 0 && size < (64 << 20) ? (int) size : 1 << 16);
                 byte[] b = new byte[65536];
                 int n;
                 try (InputStream in = c.getInputStream()) {
