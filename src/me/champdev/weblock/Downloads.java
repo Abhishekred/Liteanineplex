@@ -396,9 +396,7 @@ final class Downloads {
             long len = -1;
             boolean ranges = false;
             if (code == 206) {
-                String cr = c.getHeaderField("Content-Range");
-                int slash = cr == null ? -1 : cr.lastIndexOf('/');
-                if (slash > 0) try { len = Long.parseLong(cr.substring(slash + 1).trim()); } catch (NumberFormatException ignored) { }
+                len = rangeTotal(c);
                 ranges = len > 0;
             } else if (code == 200) {
                 len = c.getContentLengthLong();
@@ -543,18 +541,37 @@ final class Downloads {
         t.whole = false;
     }
 
-    /** The size of a file, asked for as its first byte (the answer carries it). */
+    /** The size of a file, asked for as its first byte (the answer carries it); tried again on a failure like any other request. */
     private static long size(Item it, String url) throws IOException {
-        HttpURLConnection c = connect(it, url, 0, 0);
+        IOException last = null;
+        for (int attempt = 0; attempt < 5; attempt++) {
+            if (it.stop) throw new Stopped();
+            HttpURLConnection c = null;
+            try {
+                c = connect(it, url, 0, 0);
+                long total = c.getResponseCode() == 206 ? rangeTotal(c) : -1;
+                if (total < 0) throw new IOException("HTTP " + c.getResponseCode() + " (the site does not allow ranges)");
+                return total;
+            } catch (Stopped e) {
+                throw e;
+            } catch (IOException e) {
+                last = e;
+                nap(600L * (attempt + 1), it);
+            } finally {
+                if (c != null) c.disconnect();
+            }
+        }
+        throw last;
+    }
+
+    /** The whole size a 206 answer carries ("Content-Range: bytes 0-0/12345"); -1 when it does not say. */
+    private static long rangeTotal(HttpURLConnection c) {
+        String cr = c.getHeaderField("Content-Range");
+        int slash = cr == null ? -1 : cr.lastIndexOf('/');
         try {
-            String cr = c.getHeaderField("Content-Range");
-            int slash = cr == null ? -1 : cr.lastIndexOf('/');
-            if (c.getResponseCode() != 206 || slash < 0) throw new IOException("HTTP " + c.getResponseCode() + " (the site does not allow ranges)");
-            return Long.parseLong(cr.substring(slash + 1).trim());
+            return slash > 0 ? Long.parseLong(cr.substring(slash + 1).trim()) : -1;
         } catch (NumberFormatException e) {
-            throw new IOException("the size of the file is not known");
-        } finally {
-            c.disconnect();
+            return -1;
         }
     }
 
