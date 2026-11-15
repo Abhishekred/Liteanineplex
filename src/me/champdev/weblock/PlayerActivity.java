@@ -1764,7 +1764,7 @@ public class PlayerActivity extends Activity {
             row.setBackground(st);
             row.setFocusable(true);
             row.setDefaultFocusHighlightEnabled(false);
-            row.setOnClickListener(v -> { d.dismiss(); pick.onClick(d, n); });
+            row.setOnClickListener(v -> { d.dismiss(); pick.onClick(d, n); if (App.tv) App.main.postDelayed(this::backToVideo, 150); });
             LinearLayout.LayoutParams rp = new LinearLayout.LayoutParams(-1, -2);
             rp.setMargins(dp(8), dp(1), dp(8), dp(1));
             list.addView(row, rp);
@@ -1783,6 +1783,15 @@ public class PlayerActivity extends Activity {
         w.setDimAmount(0.3f);
         d.show();
         if (first != null) { View f = first; f.post(f::requestFocus); }
+    }
+
+    /**
+     * TV, after a pick in a list (a quality, a server, a speed...): back to the video, the controls hidden, as TV players do. Not when the pick
+     * opened another list or panel (it has the focus then); Back out of a list still returns to its button.
+     */
+    void backToVideo() {
+        if (isFinishing() || panel != null || !hasWindowFocus()) return;
+        hideControls();   // rowFocus(false) takes the focus off the buttons; the next key acts on the video
     }
 
     /** More: the settings changed less often, each with its value now. */
