@@ -46,7 +46,7 @@ final class Catalog {
         String released = "";   // "2026-10-02T00:00:00.000Z": cinema release for a movie, first episode for a series
         boolean anime;   // set by search, from Kitsu's anime list
         String tags = "";   // a brand list's groups this title is in, space-separated ("mcu animation")
-        float pop;          // brand lists: TMDB's popularity now (Trending) and how many voted (Popular)
+        float pop;          // brand lists: TMDB popularity now and how many voted (Popular)
         int votes;
         final List<Episode> episodes = new ArrayList<>();
 
@@ -234,10 +234,10 @@ final class Catalog {
         return any ? new ArrayList<>(out.values()) : null;
     }
 
-    /** Our own per-language lists, built weekly by the scraper repo's job: a file per language with trending and popular titles. */
+    /** Our own per-language lists, built weekly by the scraper repo's job: a file per language with new and popular titles. */
     static final String LANGUAGE_FILES = "https://raw.githubusercontent.com/AnantPlay/scraper/main/languages/";
 
-    /** A language's Trending or Popular row. `spec` = "trending:Hindi" or "popular:Hindi". Null when the file is not here (yet) or the row is empty. */
+    /** A language's New or Popular row. `spec` = "new:Hindi" or "popular:Hindi". Null when the file is not here (yet) or the row is empty. */
     static List<Title> rank(String type, String spec, boolean diskOnly) {
         String[] parts = spec.split(":", 2);
         try {
@@ -522,7 +522,7 @@ final class Catalog {
         final List<Title> titles = new ArrayList<>();
 
         /**
-         * One of the page's rows, of one kind ("" both, movie | series): trending, popular, rated (only titles enough people voted
+         * One of the page's rows, of one kind ("" both, movie | series): new, popular, rated (only titles enough people voted
          * on), movie | series, or a group ("mcu"); the last three newest first.
          */
         List<Title> list(String kind, String row) {
@@ -531,7 +531,7 @@ final class Catalog {
                 if (!kind.isEmpty() && !kind.equals(t.type)) continue;
                 boolean in;
                 switch (row) {
-                    case "trending": case "popular": in = true; break;
+                    case "new": case "popular": in = true; break;
                     case "rated": in = t.votes >= 200; break;
                     case "movie": case "series": in = t.type.equals(row); break;
                     default: in = t.tagged(row);
@@ -539,7 +539,6 @@ final class Catalog {
                 if (in) out.add(t);
             }
             switch (row) {
-                case "trending": out.sort((x, y) -> Float.compare(y.pop, x.pop)); break;
                 case "popular": out.sort((x, y) -> y.votes - x.votes); break;
                 case "rated": out.sort((x, y) -> Float.compare(number(y.rating), number(x.rating))); break;
                 default: out.sort((x, y) -> y.year.compareTo(x.year));   // the job lists them so already, this keeps it true

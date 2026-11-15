@@ -338,10 +338,10 @@ public class TitleActivity extends Home {
         return t.anime ? "watchsite:anime" : "watchsite";
     }
 
-    /** A tap only picks the site: Watch and the episodes play on it. */
+    /** A series: a tap only picks the site, Watch and the episodes below play on it. A movie: the tap plays it there. */
     @Override void openSite(Sites.Site s) {
         App.prefs.edit().putString(siteKey(), s.url).apply();
-        rebuild();
+        if (t.series()) rebuild(); else watch(null);
     }
 
     @Override boolean picked(Sites.Site s) {

@@ -114,7 +114,7 @@ public class PlayerActivity extends Activity {
     View gestureFill;                    // the filled part of the indicator's vertical bar
     TextView gestureText;
     int zoom = 0;   // Fit at the start of every playback (the choice is not remembered)
-    static final int[] ZOOMS = {R.string.player_zoom_fit, R.string.player_zoom_fill, R.string.player_zoom_stretch, R.string.player_zoom_16_9, R.string.player_zoom_4_3};
+    static final int[] ZOOMS = {R.string.player_zoom_fit, R.string.player_zoom_fill, R.string.player_zoom_stretch};
     android.media.audiofx.LoudnessEnhancer booster;   // Volume boost, on the player's audio session
     android.media.audiofx.Equalizer voices;           // Dialog boost, same session
     // Every video starts with the Settings defaults; the Audio button changes them for this video only
@@ -1261,13 +1261,13 @@ public class PlayerActivity extends Activity {
         refreshChips();
     }
 
-    // The surface is sized to the picture: Fit letterboxes (nothing stretched), Fill crops to cover the screen, Stretch fills it,
-    // 16:9 and 4:3 force that shape
+    // The surface is sized to the picture: Fit letterboxes (nothing stretched), Fill crops to cover the screen (nothing stretched either),
+    // Stretch fills the screen with the picture pulled to its shape
     void fit() {
         View root = (View) surface.getParent();
         int w = root.getWidth(), h = root.getHeight();
         if (w == 0 || h == 0 || (videoRatio <= 0 && zoom != 2)) return;
-        float r = zoom == 3 ? 16f / 9 : zoom == 4 ? 4f / 3 : videoRatio;
+        float r = videoRatio;
         int vw = w, vh = h;
         if (zoom == 1) {
             vh = Math.round(w / r);

@@ -1101,9 +1101,9 @@ public class Home extends Activity {
 
     /** `extra` "genre=X": More opens the tab on that genre chip. moreTab -1: no More (the row is on that tab already). */
     void fillPosters(LinearLayout row, List<Catalog.Title> list, String extra, int moreTab) {
-        if (extra.startsWith("rank=")) {   // a language's Trending or Popular: 15 and a More that opens all of it as a grid
+        if (extra.startsWith("rank=")) {   // a language's New or Popular: 15 and a More that opens all of it as a grid
             String[] r = extra.substring(5).split(":", 2);
-            posterRow(row, App.t(r[0].equals("trending") ? R.string.home_trending : r[0].equals("new") ? R.string.home_new : R.string.home_popular) + "  " + r[1], list);
+            posterRow(row, App.t(r[0].equals("new") ? R.string.home_new : R.string.home_popular) + "  " + r[1], list);
             View top = row.getChildAt(0);
             if (App.tv && top != null && autoFocus != null && getCurrentFocus() == autoFocus) { top.requestFocus(); autoFocus = top; }
             return;
@@ -1160,11 +1160,10 @@ public class Home extends Activity {
         focusFirst = App.tv && firstCard == null && !skipFocus;   // the list is not here yet: showPage hands the remote over
     }
 
-    /** Under a language's chip: its Trending, Popular and New rows (left out while the scraper's file is not there), then All, the full list below. */
+    /** Under a language's chip: its New and Popular rows (left out while the scraper's file is not there), then All, the full list below. */
     void languageRows(String type, String language) {
-        titleRow(App.t(R.string.home_trending), language, type, "rank=trending:" + language, -1);
-        titleRow(App.t(R.string.home_popular), language, type, "rank=popular:" + language, -1);
         titleRow(App.t(R.string.home_new), language, type, "rank=new:" + language, -1);
+        titleRow(App.t(R.string.home_popular), language, type, "rank=popular:" + language, -1);
         col.addView(heading(App.t(R.string.home_all), language));
     }
 
