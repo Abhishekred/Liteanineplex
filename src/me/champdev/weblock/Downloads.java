@@ -1172,7 +1172,9 @@ final class Downloads {
 
     /** Sample times on one continuous timeline. */
     static final class Timeline {
-        static final long JUMP = 3_000_000, STEP = 20_000;   // µs: a time this far from the track's latest is a reset (a joined segment, an ad); the next sample goes one step on
+        // µs: a time this far ahead of the track's latest, or behind it, is a reset (a joined segment, an ad); the next sample goes one step on.
+        // Sound never goes back; a picture goes back a little (a B-frame comes before the frames it is shown after), so only BACK counts there.
+        static final long JUMP = 3_000_000, BACK = 1_000_000, STEP = 20_000;
 
         /**
          * `raw` as the track's time: a stream whose timestamps start over or jump (the pieces were cut from different places) goes on from
@@ -1180,7 +1182,7 @@ final class Downloads {
          */
         static long on(long raw, long[] last, long[] shift, int k) {
             long t = raw + shift[k];
-            if (last[k] != Long.MIN_VALUE && Math.abs(t - last[k]) > JUMP) {
+            if (last[k] != Long.MIN_VALUE && (t > last[k] + JUMP || t < last[k] - (k == 0 ? BACK : 0))) {
                 shift[k] += last[k] + STEP - t;
                 t = last[k] + STEP;
             }

@@ -122,6 +122,12 @@ public class DownloadsTest {
             check("fMP4 with sound", Downloads.Hls.mp4Audible(java.nio.file.Files.readAllBytes(f.resolve("init-av.mp4"))), true);
             check("fMP4 without", Downloads.Hls.mp4Audible(java.nio.file.Files.readAllBytes(f.resolve("init-video.mp4"))), false);
         } catch (java.io.IOException e) { fails++; System.out.println("FAIL fixtures: " + e); }
+        // smaller resets: a picture 1.5 s back, a sound any step back (an MP4 cannot take falling sound times)
+        long[] l2 = {10_000_000L, 10_000_000L}, s2 = {0, 0};
+        check("picture 0.4 s back: B-frames, kept", Downloads.Timeline.on(9_600_000L, l2, s2, 0), 9_600_000L);
+        check("picture 1.5 s back: a reset", Downloads.Timeline.on(8_500_000L, l2, s2, 0), 10_000_000L + Downloads.Timeline.STEP);
+        check("sound 50 ms back: a reset", Downloads.Timeline.on(9_950_000L, l2, s2, 1), 10_000_000L + Downloads.Timeline.STEP);
+        check("sound at the same time: kept", Downloads.Timeline.on(10_000_000L, new long[]{0, 10_000_000L}, new long[]{0, 0}, 1), 10_000_000L);
         System.out.println(fails == 0 ? "all passed" : fails + " failed");
         if (fails > 0) System.exit(1);
     }
