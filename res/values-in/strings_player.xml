@@ -22,7 +22,7 @@
     <string name="player_speed">Kecepatan</string>
     <string name="player_speed_now">Kecepatan · %1$s</string>
     <string name="player_zoom_fit">Pas</string>
-    <string name="player_zoom_fill">Penuh</string>
+    <string name="player_zoom_fill">Pangkas</string>
     <string name="player_zoom_stretch">Regang</string>
     <string name="player_zoom_now">Zoom · %1$s</string>
     <string name="player_debug_now">Overlay debug: %1$s</string>

@@ -22,7 +22,7 @@
     <string name="player_speed">स्पीड</string>
     <string name="player_speed_now">स्पीड · %1$s</string>
     <string name="player_zoom_fit">फ़िट</string>
-    <string name="player_zoom_fill">फ़िल</string>
+    <string name="player_zoom_fill">क्रॉप</string>
     <string name="player_zoom_stretch">स्ट्रेच</string>
     <string name="player_zoom_now">ज़ूम · %1$s</string>
     <string name="player_debug_now">डीबग ओवरले: %1$s</string>

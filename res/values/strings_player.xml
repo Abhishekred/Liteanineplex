@@ -25,7 +25,7 @@
     <string name="player_speed">Speed</string>
     <string name="player_speed_now">Speed · %1$s</string>
     <string name="player_zoom_fit">Fit</string>
-    <string name="player_zoom_fill">Fill</string>
+    <string name="player_zoom_fill">Crop</string>
     <string name="player_zoom_stretch">Stretch</string>
     <string name="player_zoom_now">Zoom · %1$s</string>
     <string name="player_debug_now">Debug overlay: %1$s</string>

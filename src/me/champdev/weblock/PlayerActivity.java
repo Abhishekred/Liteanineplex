@@ -75,6 +75,8 @@ public class PlayerActivity extends Activity {
 
     ExoPlayer player;
     SurfaceView surface;
+    android.view.TextureView texture;   // Crop and Stretch draw here (see fit)
+    boolean onTexture;
     TextView subtitle, title, time, timeTotal, notice;
     View spinner;
     ImageView playPause;
@@ -380,6 +382,9 @@ public class PlayerActivity extends Activity {
         root.setDefaultFocusHighlightEnabled(false);   // a remote key would grey out the whole picture
         surface = new SurfaceView(this);
         root.addView(surface, new FrameLayout.LayoutParams(-1, -1));
+        texture = new android.view.TextureView(this);
+        texture.setVisibility(View.GONE);
+        root.addView(texture, new FrameLayout.LayoutParams(-1, -1));
         root.addOnLayoutChangeListener((v, l, t, r, b, ol, ot, or, ob) -> {
             fit();
             if (r - l != or - ol) {
@@ -1265,8 +1270,8 @@ public class PlayerActivity extends Activity {
         refreshChips();
     }
 
-    // The surface is sized to the picture: Fit letterboxes (nothing stretched), Fill crops to cover the screen (nothing stretched either),
-    // Stretch fills the screen with the picture pulled to its shape
+    // Fit letterboxes (nothing stretched), Crop covers the screen and cuts what is past its edges (nothing stretched either; black bars inside
+    // the picture go too), Stretch pulls the picture (without its bars) to the screen's shape
     void fit() {
         View root = (View) surface.getParent();
         int w = root.getWidth(), h = root.getHeight();
@@ -1284,9 +1289,27 @@ public class PlayerActivity extends Activity {
             vh = Math.round(w / r);
             if (vh > h) { vh = h; vw = Math.round(h * r); }
         }
+        if (zoom != 0) {
+            // A SurfaceView bigger than the screen is squeezed back into it by some TVs (on a TCL, Crop looked just like Stretch): what reaches
+            // past the edges is drawn on a TextureView, which is cut at the screen like any view, scaled about its middle
+            useTexture(true);
+            android.graphics.Matrix m = new android.graphics.Matrix();
+            m.setScale(vw / (float) w, vh / (float) h, w / 2f, h / 2f);
+            texture.setTransform(m);
+            return;
+        }
+        useTexture(false);   // Fit: the SurfaceView (the cheapest way to show video), never bigger than the screen
         FrameLayout.LayoutParams lp = (FrameLayout.LayoutParams) surface.getLayoutParams();
         if (lp.width == vw && lp.height == vh) return;
         surface.setLayoutParams(new FrameLayout.LayoutParams(vw, vh, Gravity.CENTER));
+    }
+
+    void useTexture(boolean on) {
+        if (on == onTexture || player == null) return;
+        onTexture = on;
+        (on ? texture : surface).setVisibility(View.VISIBLE);
+        if (on) player.setVideoTextureView(texture); else player.setVideoSurfaceView(surface);
+        (on ? surface : texture).setVisibility(View.GONE);
     }
 
     float barX = -1, barY = -1;   // Fill and Stretch: the share of the picture, each side, that is black bars baked into the video (a wide film in a 16:9 frame); -1 = not measured
@@ -1296,7 +1319,13 @@ public class PlayerActivity extends Activity {
         @Override public void run() {
             if (zoom == 0 || isFinishing()) return;
             App.main.postDelayed(this, 2000);
-            if (player == null || !player.isPlaying() || surface.getWidth() == 0 || !surface.getHolder().getSurface().isValid()) return;
+            if (player == null || !player.isPlaying()) return;
+            if (onTexture) {   // the frame as the decoder gave it (the view's scaling is not in it)
+                android.graphics.Bitmap b = texture.isAvailable() ? texture.getBitmap(160, 90) : null;
+                if (b != null) bars(b);
+                return;
+            }
+            if (surface.getWidth() == 0 || !surface.getHolder().getSurface().isValid()) return;
             android.graphics.Bitmap bmp = android.graphics.Bitmap.createBitmap(160, 90, android.graphics.Bitmap.Config.ARGB_8888);
             try {
                 android.view.PixelCopy.request(surface, bmp, res -> { if (res == android.view.PixelCopy.SUCCESS) bars(bmp); }, App.main);

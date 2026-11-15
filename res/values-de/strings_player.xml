@@ -22,7 +22,7 @@
     <string name="player_speed">Geschwindigkeit</string>
     <string name="player_speed_now">Geschwindigkeit · %1$s</string>
     <string name="player_zoom_fit">Einpassen</string>
-    <string name="player_zoom_fill">Füllen</string>
+    <string name="player_zoom_fill">Zuschneiden</string>
     <string name="player_zoom_stretch">Strecken</string>
     <string name="player_zoom_now">Zoom · %1$s</string>
     <string name="player_debug_now">Debug-Overlay: %1$s</string>
