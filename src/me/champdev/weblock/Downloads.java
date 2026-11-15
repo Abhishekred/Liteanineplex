@@ -922,7 +922,7 @@ final class Downloads {
         }
 
         /**
-         * One period (the longest), its best MP4 picture (highest bandwidth, a codec an MP4 holds) and its sound (AAC first). Pieces come from a
+         * One period (the longest; short ones are idents and ads, two long ones are refused), its best MP4 picture (highest bandwidth, a codec an MP4 holds) and its sound (AAC first). Pieces come from a
          * SegmentTemplate (a timeline, or a length) or a SegmentList; a stream that is one big file per quality is refused, as are live and protected ones.
          */
         static Pick pick(String xml, String mpdUrl) throws IOException {
@@ -939,13 +939,17 @@ final class Downloads {
             List<org.w3c.dom.Element> periods = kids(mpd, "Period");
             org.w3c.dom.Element period = null;
             double length = 0;
+            int parts = 0;   // periods long enough to be the film itself, not an ident or an ad
             for (int i = 0; i < periods.size(); i++) {
                 org.w3c.dom.Element p = periods.get(i);
                 double d = seconds(p.getAttribute("duration"));
                 if (d <= 0) d = (i + 1 < periods.size() ? seconds(periods.get(i + 1).getAttribute("start")) : total) - seconds(p.getAttribute("start"));
                 if (d <= 0) d = total;
+                if (d >= 30) parts++;
                 if (period == null || d > length) { period = p; length = d; }
             }
+            // ponytail: a film in several periods is refused rather than joined; joining needs their timelines put end to end
+            if (parts > 1) throw new Refused(R.string.dl_dash_periods);   // only one of them would be saved, and the rest silently lost
             if (period == null) throw new IOException("no period in the manifest");
             String periodBase = baseUrl(period, mpdBase);
             org.w3c.dom.Element vRep = null, vSet = null, aRep = null, aSet = null;

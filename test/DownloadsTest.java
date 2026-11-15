@@ -80,6 +80,14 @@ public class DownloadsTest {
             catch (Downloads.Refused e) { check("refused " + bad[1], e.res, Integer.parseInt(bad[1])); } catch (Exception e) { fails++; System.out.println("FAIL refused with " + e); }
         }
         try { Downloads.Dash.pick("<!DOCTYPE x [<!ENTITY e SYSTEM \"file:///etc/passwd\">]><MPD/>", "https://x.test/m.mpd"); fails++; System.out.println("FAIL doctype accepted"); } catch (java.io.IOException e) { check("no doctype", true, true); }
+        String two = "<MPD mediaPresentationDuration=\"PT120S\"><Period duration=\"PT60S\"><AdaptationSet mimeType=\"video/mp4\"><SegmentTemplate media=\"a$Number$.m4s\" duration=\"4\"/><Representation id=\"v\" bandwidth=\"1\"/></AdaptationSet></Period>"
+            + "<Period duration=\"PT60S\"><AdaptationSet mimeType=\"video/mp4\"><SegmentTemplate media=\"b$Number$.m4s\" duration=\"4\"/><Representation id=\"v\" bandwidth=\"1\"/></AdaptationSet></Period></MPD>";
+        try { Downloads.Dash.pick(two, "https://x.test/m.mpd"); fails++; System.out.println("FAIL two long periods accepted"); }
+        catch (Downloads.Refused e) { check("two long periods refused", e.res, R.string.dl_dash_periods); } catch (Exception e) { fails++; System.out.println("FAIL periods: " + e); }
+        try {
+            Downloads.Track film = Downloads.Dash.pick(two.replaceFirst("PT60S", "PT10S"), "https://x.test/m.mpd").video;   // a 10 s ident, then the film
+            check("an ident period is skipped", film.segs.get(0).url, "https://x.test/b1.m4s");
+        } catch (Exception e) { fails++; System.out.println("FAIL ident: " + e); }
         try {
             Downloads.Track whole = Downloads.Dash.pick("<MPD mediaPresentationDuration=\"PT8S\"><Period><AdaptationSet mimeType=\"video/mp4\"><Representation id=\"v\" bandwidth=\"1\" height=\"360\"><BaseURL>one.mp4</BaseURL><SegmentBase indexRange=\"0-9\"/></Representation></AdaptationSet></Period></MPD>", "https://x.test/d/m.mpd").video;
             check("one file per quality", whole.whole + " " + whole.segs.get(0).url, "true https://x.test/d/one.mp4");
