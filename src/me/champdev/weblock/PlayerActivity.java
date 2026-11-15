@@ -1175,7 +1175,11 @@ public class PlayerActivity extends Activity {
                 measuredFps = 0;
                 fpsMinGapUs = Long.MAX_VALUE;
                 fpsFrames = 0;
-                if (v.width > 0 && v.height > 0) videoRatio = v.width * v.pixelWidthHeightRatio / v.height;
+                if (v.width > 0 && v.height > 0) {
+                    float ratio = v.width * v.pixelWidthHeightRatio / v.height;
+                    if (Math.abs(ratio - videoRatio) > 0.01f) barX = barY = -1;   // another picture shape: other bars
+                    videoRatio = ratio;
+                }
                 fit();
                 updatePip();
                 refreshChips();
@@ -1270,8 +1274,9 @@ public class PlayerActivity extends Activity {
         float r = videoRatio;
         int vw = w, vh = h;
         if (zoom == 1) {
-            vh = Math.round(w / r);
-            if (vh < h) { vh = h; vw = Math.round(h * r); }
+            float k = Math.max(w / (r * (1 - 2 * Math.max(0, barX))), h / (1 - 2 * Math.max(0, barY)));   // the picture without its own black bars covers the screen
+            vw = Math.round(r * k);
+            vh = Math.round(k);
         } else if (zoom != 2) {
             vh = Math.round(w / r);
             if (vh > h) { vh = h; vw = Math.round(h * r); }
@@ -1281,8 +1286,48 @@ public class PlayerActivity extends Activity {
         surface.setLayoutParams(new FrameLayout.LayoutParams(vw, vh, Gravity.CENTER));
     }
 
+    float barX = -1, barY = -1;   // Fill: the share of the picture, each side, that is black bars baked into the video (a wide film in a 16:9 frame); -1 = not measured
+
+    /** While Fill is on: a small copy of the frame every 2 s, to find those bars. The smallest seen is kept, since a dark scene shows more black than there is. */
+    final Runnable barLoop = new Runnable() {
+        @Override public void run() {
+            if (zoom != 1 || isFinishing()) return;
+            App.main.postDelayed(this, 2000);
+            if (player == null || !player.isPlaying() || surface.getWidth() == 0 || !surface.getHolder().getSurface().isValid()) return;
+            android.graphics.Bitmap bmp = android.graphics.Bitmap.createBitmap(160, 90, android.graphics.Bitmap.Config.ARGB_8888);
+            try {
+                android.view.PixelCopy.request(surface, bmp, res -> { if (res == android.view.PixelCopy.SUCCESS) bars(bmp); }, App.main);
+            } catch (RuntimeException ignored) { }   // a protected video cannot be copied: nothing to measure
+        }
+    };
+
+    void bars(android.graphics.Bitmap b) {
+        int w = b.getWidth(), h = b.getHeight();
+        int[] px = new int[w * h], rows = new int[h], cols = new int[w];
+        b.getPixels(px, 0, w, 0, 0, w, h);
+        for (int y = 0; y < h; y++) for (int x = 0; x < w; x++) {
+            int p = px[y * w + x];
+            if ((p >> 16 & 255) + (p >> 8 & 255) + (p & 255) > 3 * 28) { rows[y]++; cols[x]++; }
+        }
+        float ny = bar(rows, w), nx = bar(cols, h);   // a few lit pixels (a logo, noise) do not count as picture
+        float oy = barY, ox = barX;
+        if (ny >= 0) barY = barY < 0 ? ny : Math.min(barY, ny);
+        if (nx >= 0) barX = barX < 0 ? nx : Math.min(barX, nx);
+        if (Math.abs(barY - oy) > 0.004f || Math.abs(barX - ox) > 0.004f) fit();
+    }
+
+    /** The bars at the ends of one axis as a share of it, when they match (real bars do; a dark scene rarely does); -1 when they do not or there is no picture. `lit` = lit pixels per line, `len` = a line's pixels. */
+    static float bar(int[] lit, int len) {
+        int n = lit.length, min = Math.max(2, len * 3 / 100), a = 0, z = 0;
+        while (a < n && lit[a] < min) a++;
+        while (z < n && lit[n - 1 - z] < min) z++;
+        if (a >= n || Math.abs(a - z) > n * 3 / 100) return -1;
+        return Math.min(0.3f, Math.min(a, z) == 0 ? 0 : Math.min(a, z) / (float) n + 0.004f);   // a hair more, so no sliver of the bar is left
+    }
+
     void cycleZoom() {
         zoom = (zoom + 1) % ZOOMS.length;
+        if (zoom == 1) { App.main.removeCallbacks(barLoop); App.main.post(barLoop); }   // it stops by itself once Fill is left
         fit();
         say(App.t(R.string.player_zoom_say, App.t(ZOOMS[zoom])));
         refreshChips();
