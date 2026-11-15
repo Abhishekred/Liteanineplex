@@ -76,7 +76,7 @@ public class PlayerActivity extends Activity {
     ExoPlayer player;
     SurfaceView surface;
     TextView subtitle, title, time, timeTotal, notice;
-    ProgressBar spinner;
+    View spinner;
     ImageView playPause;
     SeekBar seek;
     View controls;
@@ -396,8 +396,7 @@ public class PlayerActivity extends Activity {
         root.addView(subtitle, new FrameLayout.LayoutParams(-2, -2, Gravity.BOTTOM | Gravity.CENTER_HORIZONTAL));
         placeSubtitle();
 
-        spinner = new ProgressBar(this);
-        spinner.setIndeterminateTintList(android.content.res.ColorStateList.valueOf(Home.ACCENT));
+        spinner = new Home.Spinner(this);
         root.addView(spinner, new FrameLayout.LayoutParams(dp(56), dp(56), Gravity.CENTER));
 
         notice = new TextView(this);

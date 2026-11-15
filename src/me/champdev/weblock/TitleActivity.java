@@ -338,9 +338,15 @@ public class TitleActivity extends Home {
         return t.anime ? "watchsite:anime" : "watchsite";
     }
 
+    /** A tap only picks the site: Watch and the episodes play on it. */
     @Override void openSite(Sites.Site s) {
         App.prefs.edit().putString(siteKey(), s.url).apply();
-        watch(null);   // the same as Watch, on the site just picked: a series starts its first episode, with the loading screen
+        rebuild();
+    }
+
+    @Override boolean picked(Sites.Site s) {
+        Sites.Site c = chosen();
+        return c != null && c.url.equals(s.url);
     }
 
     // The title's own page when the site is known (by TMDB id), else the site with a search for its name

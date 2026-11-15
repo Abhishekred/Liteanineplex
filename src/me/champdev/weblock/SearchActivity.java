@@ -302,9 +302,7 @@ public class SearchActivity extends Home {
         LinearLayout line = new LinearLayout(this);
         line.setGravity(Gravity.CENTER_VERTICAL);
         line.setPadding(dp(4), dp(8), 0, dp(8));
-        android.widget.ProgressBar spin = new android.widget.ProgressBar(this);
-        spin.setIndeterminateTintList(android.content.res.ColorStateList.valueOf(ACCENT));
-        line.addView(spin, new LinearLayout.LayoutParams(dp(28), dp(28)));
+        line.addView(new Spinner(this), new LinearLayout.LayoutParams(dp(28), dp(28)));
         TextView t = text(App.t(R.string.search_searching), sp(15, 13), MUTED, false);
         t.setPadding(dp(12), 0, 0, 0);
         line.addView(t);

@@ -341,8 +341,7 @@ public class Home extends Activity {
             return;
         }
         refreshing = true;
-        android.widget.ProgressBar spin = new android.widget.ProgressBar(this);
-        spin.setIndeterminateTintList(ColorStateList.valueOf(ACCENT));
+        View spin = new Spinner(this);
         LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(dp(28), dp(28));
         lp.gravity = Gravity.CENTER_HORIZONTAL;
         lp.setMargins(0, dp(8), 0, dp(8));
@@ -962,9 +961,7 @@ public class Home extends Activity {
         tile.setGravity(Gravity.CENTER);
         tile.setBackground(rounded(CARD, dp(10)));
         tile.setLayoutParams(cardParams(grid.cell, grid.cell * 3 / 2));
-        android.widget.ProgressBar spin = new android.widget.ProgressBar(this);
-        spin.setIndeterminateTintList(android.content.res.ColorStateList.valueOf(ACCENT));
-        tile.addView(spin, new LinearLayout.LayoutParams(dp(36), dp(36)));
+        tile.addView(new Spinner(this), new LinearLayout.LayoutParams(dp(36), dp(36)));
         TextView label = text(App.t(R.string.home_loading), sp(14, 12), MUTED, false);
         label.setPadding(0, dp(10), 0, 0);
         label.setGravity(Gravity.CENTER);
@@ -2506,7 +2503,9 @@ public class Home extends Activity {
         if (cardH < 70) { tags.setTextSize(sp(11, 10)); tags.setPadding(0, u(2, 1), 0, 0); }   // the slim card: smaller, close under the name
         if (cardH >= 52) card.addView(tags);
 
-        card.setBackground(rounded(CARD, dp(14)));
+        GradientDrawable fill = rounded(picked(s) ? CARD_HI : CARD, dp(14));
+        if (picked(s)) fill.setStroke(dp(2), ACCENT);   // the site Watch will use
+        card.setBackground(fill);
         focusable(card, dp(14));
         card.setTag("s" + s.url);
         card.setOnClickListener(v -> openSite(s));
@@ -2532,6 +2531,9 @@ public class Home extends Activity {
     void openSite(Sites.Site s) {
         startActivity(WebActivity.open(this, s.name, s.url, s.url));
     }
+
+    /** True for the site card that is the title page's current pick (it gets an outline). */
+    boolean picked(Sites.Site s) { return false; }
 
     View languageCard(String language, int count) {
         LinearLayout card = new LinearLayout(this);
@@ -2665,6 +2667,27 @@ public class Home extends Activity {
         int y = page.getScrollY(), h = page.getHeight();
         if (r.top - dp(64) < y) page.smoothScrollTo(0, Math.max(0, r.top - dp(64)));
         else if (r.bottom + dp(48) > y + h) page.smoothScrollTo(0, r.bottom + dp(48) - h);
+    }
+
+    /** A turning arc, drawn frame by frame from the clock. The stock ProgressBar stands still where the system's animations are off (Mi TV), which looks like a hang. */
+    static class Spinner extends View {
+        final android.graphics.Paint paint = new android.graphics.Paint(android.graphics.Paint.ANTI_ALIAS_FLAG);
+
+        Spinner(Context c) {
+            super(c);
+            paint.setStyle(android.graphics.Paint.Style.STROKE);
+            paint.setStrokeCap(android.graphics.Paint.Cap.ROUND);
+            paint.setColor(ACCENT);
+        }
+
+        @Override protected void onDraw(android.graphics.Canvas cv) {
+            float side = Math.min(getWidth(), getHeight()), w = side / 9;
+            float x = (getWidth() - side) / 2 + w, y = (getHeight() - side) / 2 + w;
+            paint.setStrokeWidth(w);
+            cv.rotate(android.os.SystemClock.uptimeMillis() % 900 * 0.4f, getWidth() / 2f, getHeight() / 2f);   // a turn in 0.9 s
+            cv.drawArc(x, y, x + side - 2 * w, y + side - 2 * w, 0, 270, false, paint);
+            postInvalidateOnAnimation();   // only while it is drawn: hidden, it stops
+        }
     }
 
     static GradientDrawable rounded(int color, int radius) {
