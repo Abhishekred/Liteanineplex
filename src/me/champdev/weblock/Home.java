@@ -1851,6 +1851,15 @@ public class Home extends Activity {
         secBox.addView(settingRow(R.drawable.ic_p_audio, App.t(R.string.home_audio_language), App.t(R.string.home_audio_language_help), audioValue, v -> audioLanguageDialog()));
         audioValue.setText(audioLanguageName(App.prefs.getString("audioLang", "")));
         audioValue.setTextColor(App.prefs.getString("audioLang", "").isEmpty() ? MUTED : GREEN);
+        if (!App.tv) {   // a TV has no touch
+            TextView swipeValue = new TextView(this);
+            secBox.addView(settingRow(R.drawable.ic_p_sun, App.t(R.string.home_swipe_controls), App.t(R.string.home_swipe_controls_help), swipeValue, v -> {
+                App.prefs.edit().putBoolean("swipeControls", !PlayerActivity.swipeOn()).apply();
+                rebuild();
+            }));
+            swipeValue.setText(App.t(PlayerActivity.swipeOn() ? R.string.home_on : R.string.home_off));
+            swipeValue.setTextColor(PlayerActivity.swipeOn() ? GREEN : MUTED);
+        }
         TextView boostValue = new TextView(this);
         secBox.addView(settingRow(R.drawable.ic_p_volume, App.t(R.string.home_volume_boost), App.t(R.string.home_volume_boost_help), boostValue, v -> audioPanel()));
         boostValue.setText(PlayerActivity.boostLabel(PlayerActivity.boostDb()));
