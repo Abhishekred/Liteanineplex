@@ -985,7 +985,7 @@ public class Home extends Activity {
         LinearLayout bar = new LinearLayout(this);
         bar.setGravity(Gravity.CENTER_VERTICAL);
         bar.setBackgroundColor(BG);
-        bar.setPadding(dp(10), 0, dp(4), 0);   // the status bar above already leaves room
+        bar.setPadding(dp(10), 0, dp(4), dp(8));   // the status bar above already leaves room; below, a gap before the page starts
         ImageView logo = new ImageView(this);
         logo.setImageResource(R.drawable.ic_logo);
         LinearLayout.LayoutParams ll = new LinearLayout.LayoutParams(dp(28), dp(28));
