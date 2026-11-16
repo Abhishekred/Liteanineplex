@@ -2782,7 +2782,9 @@ public class Home extends Activity {
     void startLoad(ImageView into, String url, View placeholder, int min, String key) {
         java.util.function.Consumer<Bitmap> done = b -> {
             if (b == null || !key.equals(into.getTag())) return;   // failed, or the view shows something else by now
+            boolean had = into.getDrawable() != null;   // another size already shows: swapped in place, no fade from nothing
             show(into, b, placeholder);
+            if (had) return;
             into.setAlpha(0f);
             into.animate().alpha(1).setDuration(180).start();
         };
@@ -2798,6 +2800,12 @@ public class Home extends Activity {
             synchronized (loading) { waiting = loading.remove(key); }
             for (java.util.function.Consumer<Bitmap> c : waiting) App.main.post(() -> c.accept(b));
         });
+    }
+
+    /** The same picture at any size already in memory (a card shows a poster smaller than a title page does); null when none is. */
+    static Bitmap anySize(String url) {
+        for (Map.Entry<String, Bitmap> e : images.snapshot().entrySet()) if (e.getKey().startsWith(url + "@")) return e.getValue();
+        return null;
     }
 
     void show(ImageView into, Bitmap b, View placeholder) {
