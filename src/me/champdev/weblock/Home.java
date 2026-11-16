@@ -1274,6 +1274,20 @@ public class Home extends Activity {
         }
     }
 
+    /** The channels hidden as offline: Restore all, or one of them. A restored channel is never hidden again. */
+    void restoreChannels(List<Iptv.Channel> hidden) {
+        String[] names = new String[hidden.size() + 1];
+        names[0] = App.t(R.string.iptv_restore_all, hidden.size());
+        for (int i = 0; i < hidden.size(); i++) names[i + 1] = hidden.get(i).name;
+        new AlertDialog.Builder(this).setTitle(App.t(R.string.iptv_restore_title)).setItems(names, (d, i) -> {
+            List<String> urls = new ArrayList<>();
+            if (i == 0) for (Iptv.Channel c : hidden) urls.add(c.url); else urls.add(hidden.get(i - 1).url);
+            Iptv.restore(urls);
+            toast(App.t(i == 0 ? R.string.iptv_restored_all : R.string.iptv_restored, i == 0 ? String.valueOf(urls.size()) : hidden.get(i - 1).name));
+            rebuild();
+        }).show();
+    }
+
     /**
      * IPTV, in the order people reach for channels: what you watched, your stars, your own playlists and pins,
      * your country's channels, then every category and country as a compact list.
@@ -1286,6 +1300,13 @@ public class Home extends Activity {
         if (status.isEmpty() && App.tv && !Iptv.history().isEmpty()) status = App.t(R.string.home_hint_hold_channel);
         TextView note = text(status, sp(13, 12), MUTED, false);
         h.addView(note, new LinearLayout.LayoutParams(0, -2, 1));
+        List<Iptv.Channel> hidden = all.isEmpty() || Iptv.sweeping ? new ArrayList<>() : Iptv.hidden();
+        if (!hidden.isEmpty()) {   // the offline ones can be brought back, one by one or all
+            TextView show = chip(v -> restoreChannels(hidden));
+            show.setText(App.t(R.string.iptv_restore_chip));
+            show.setBackground(rounded(CARD, dp(22)));
+            h.addView(show);
+        }
         TextView add = chip(v -> addPlaylistDialog());   // channels are in Search, with movies and sites
         add.setText(App.t(R.string.home_add_playlist_chip));
         add.setBackground(rounded(CARD, dp(22)));

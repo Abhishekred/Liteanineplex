@@ -1208,7 +1208,7 @@ public class PlayerActivity extends Activity {
                         Log.w(TAG, "FAILED " + c + " " + ((androidx.media3.datasource.HttpDataSource.HttpDataSourceException) c).dataSpec.uri);
                     } else if (c instanceof androidx.media3.common.ParserException) Log.w(TAG, "FAILED parse " + c.getMessage() + " stream " + getIntent().getStringExtra("url"));
                 }
-                if (getIntent().hasExtra("mime")) { Iptv.mark(channel(), false); Iptv.saveHealth(); }
+                // a channel that fails once stays listed (a stream can be down for a while, or fail on this device only); only the background check hides one
                 Toast.makeText(PlayerActivity.this, App.t(getIntent().hasExtra("mime") ? R.string.player_channel_offline : R.string.player_cant_play, e.getErrorCodeName()),
                     Toast.LENGTH_LONG).show();
                 setResult(RESULT_CANCELED);
