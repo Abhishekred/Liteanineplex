@@ -19,7 +19,7 @@ import java.security.SecureRandom;
  * in the native player (80% or more) are set as your progress there. The token lasts a month and is renewed with its refresh token.
  */
 final class Mal {
-    static final String CLIENT_ID = "";
+    static final String CLIENT_ID = "61cb89cdcecd5081238403a22779b624";   // a public client (no secret): it ships in every copy of the app
     /** Registered at myanimelist.net/apiconfig. Never loaded: the sign-in browser stops when the page is sent here. */
     static final String REDIRECT = "https://anantplay.github.io/android/mal";
     static final String AUTH = "https://myanimelist.net/v1/oauth2/authorize", TOKEN = "https://myanimelist.net/v1/oauth2/token";
