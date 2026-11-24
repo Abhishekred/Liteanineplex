@@ -18,7 +18,7 @@ import java.nio.charset.StandardCharsets;
  * the sign-in page ends on. It lasts a year; when it stops working you sign in again.
  */
 final class AniList {
-    static final String CLIENT_ID = "";
+    static final String CLIENT_ID = "57956";   // public: the sign-in uses the implicit grant, so the app has no secret in it
     /** Registered at anilist.co/settings/developer. Never loaded: the sign-in browser stops when the page is sent here. */
     static final String REDIRECT = "https://anantplay.github.io/android/anilist";
     static final String LOGIN = "https://anilist.co/api/v2/oauth/authorize?response_type=token&client_id=" + CLIENT_ID;
@@ -60,7 +60,8 @@ final class AniList {
             String reply = call("mutation($id:Int,$p:Int,$s:MediaListStatus){SaveMediaListEntry(mediaId:$id,progress:$p,status:$s){id}}",
                 new JSONObject().put("id", id).put("p", episode).put("s", status), token);
             Log.i("AniList", "progress " + id + " ep " + episode + " " + reply.substring(0, Math.min(160, reply.length())));
-            if (reply.contains("SaveMediaListEntry"))
+            JSONObject saved = new JSONObject(reply).optJSONObject("data");   // an error reply has "SaveMediaListEntry": null
+            if (saved != null && saved.optJSONObject("SaveMediaListEntry") != null)
                 App.main.post(() -> android.widget.Toast.makeText(App.app, App.t(R.string.anilist_marked), android.widget.Toast.LENGTH_SHORT).show());
         } catch (Exception e) {
             Log.w("AniList", "progress failed", e);
