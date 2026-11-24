@@ -1875,6 +1875,11 @@ public class Home extends Activity {
         }));
         autoSub.setText(App.t(Subs.auto() ? R.string.home_on : R.string.home_off));
         autoSub.setTextColor(Subs.auto() ? GREEN : MUTED);
+        TextView addonValue = new TextView(this);
+        secBox.addView(settingRow(R.drawable.ic_p_subs, App.t(R.string.subs_addon), App.t(R.string.subs_addon_help), addonValue, v ->
+            Subs.editAddonUrl(this, u -> { App.prefs.edit().putString("subAddonUrl", u).apply(); rebuild(); })));
+        addonValue.setText(Subs.addonLabel());
+        addonValue.setTextColor(Subs.addonUrl().isEmpty() ? MUTED : GREEN);
         TextView autoSkip = new TextView(this);
         boolean skipOn = App.prefs.getBoolean("autoSkip", false);
         secBox.addView(settingRow(R.drawable.ic_p_next, App.t(R.string.home_auto_skip), App.t(R.string.home_auto_skip_help), autoSkip, v -> {
