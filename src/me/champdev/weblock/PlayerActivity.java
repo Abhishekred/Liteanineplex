@@ -2509,12 +2509,12 @@ public class PlayerActivity extends Activity {
         }
     }
 
-    // ---- Simkl ----
+    // ---- Simkl, PunchPlay, Trakt, AniList, MyAnimeList ----
 
     boolean scrobbled, stopped;   // a start went out for this video; the stop went out
     final String session = java.util.UUID.randomUUID().toString();   // PunchPlay's playback_session_id for this video
 
-    /** Tells Simkl and PunchPlay where the video is, for a movie or an episode from the catalog (live streams and unknown episodes are left out). */
+    /** Tells Simkl, PunchPlay and Trakt where the video is (and the anime lists when an episode is done), for a movie or an episode from the catalog (live streams and unknown episodes are left out). */
     void scrobble(String action) {
         if (player == null || player.isCurrentMediaItemLive() || stopped || !scrobbled) return;
         long dur = player.getDuration();
@@ -2527,6 +2527,12 @@ public class PlayerActivity extends Activity {
             player.getPlaybackState() == Player.STATE_ENDED ? 100 : player.getCurrentPosition() * 100.0 / dur);
         PunchPlay.scrobble(action, getIntent().getStringExtra("imdb"), title.getText().toString(), episode,
             player.getPlaybackState() == Player.STATE_ENDED ? dur : player.getCurrentPosition(), dur, session);
+        double percent = player.getPlaybackState() == Player.STATE_ENDED ? 100 : player.getCurrentPosition() * 100.0 / dur;
+        Trakt.scrobble(action, getIntent().getStringExtra("imdb"), episode, percent);
+        if (action.equals("stop") && percent >= 80 && episode != null) {   // an anime episode counts on the anime lists too
+            WebActivity page = WebActivity.active;
+            AnimeSync.watched(seriesInfo != null ? seriesInfo : page != null ? page.show : null, episode[0], episode[1]);
+        }
     }
 
     // ---- Cast (phone): send this video to an AnantPlay TV on the same Wi-Fi, then be its remote ----

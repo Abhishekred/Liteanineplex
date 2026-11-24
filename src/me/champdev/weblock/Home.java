@@ -720,8 +720,28 @@ public class Home extends Activity {
         }
     }
 
+    static final int REQ_ANILIST = 78, REQ_MAL = 79;
+
+    /** AniList / MyAnimeList: their own sign-in page in a small browser; what it ends on comes back to onActivityResult. */
+    void signIn(String url, String redirect, int req) {
+        startActivityForResult(new Intent(this, AuthActivity.class).putExtra("url", url).putExtra("redirect", redirect), req);
+    }
+
     @Override protected void onActivityResult(int req, int res, Intent data) {
         super.onActivityResult(req, res, data);
+        if (req == REQ_ANILIST || req == REQ_MAL) {
+            android.net.Uri back = res == RESULT_OK && data != null ? data.getData() : null;
+            if (back == null) return;   // closed with Back
+            App.io.execute(() -> {
+                boolean ok = req == REQ_ANILIST ? AniList.accept(back) : Mal.accept(back);
+                runOnUiThread(() -> {
+                    if (isFinishing()) return;
+                    toast(App.t(ok ? (req == REQ_ANILIST ? R.string.anilist_connected : R.string.mal_connected) : R.string.tracker_signin_failed));
+                    if (ok) rebuild();
+                });
+            });
+            return;
+        }
         if (req != REQ_VOICE || res != RESULT_OK || data == null || voiceDone == null) return;
         java.util.ArrayList<String> said = data.getStringArrayListExtra(android.speech.RecognizerIntent.EXTRA_RESULTS);
         if (said != null && !said.isEmpty()) voiceDone.accept(said.get(0));
@@ -1903,6 +1923,28 @@ public class Home extends Activity {
         }));
         ppValue.setText(App.t(PunchPlay.signedIn() ? R.string.home_connected : R.string.home_connect));
         ppValue.setTextColor(PunchPlay.signedIn() ? GREEN : ACCENT);
+        // a tracker with no client id yet (not registered) has no row
+        TextView traktValue = new TextView(this);
+        if (!Trakt.CLIENT_ID.isEmpty()) secBox.addView(settingRow(R.drawable.ic_movie, "Trakt", App.t(R.string.trakt_help), traktValue, v -> {
+            if (Trakt.signedIn()) confirm(App.t(R.string.trakt_disconnect_title), App.t(R.string.trakt_disconnect_msg), App.t(R.string.home_disconnect), () -> { Trakt.signOut(); rebuild(); });
+            else traktDialog();
+        }));
+        traktValue.setText(App.t(Trakt.signedIn() ? R.string.home_connected : R.string.home_connect));
+        traktValue.setTextColor(Trakt.signedIn() ? GREEN : ACCENT);
+        TextView aniValue = new TextView(this);
+        if (!AniList.CLIENT_ID.isEmpty()) secBox.addView(settingRow(R.drawable.ic_movie, "AniList", App.t(R.string.anilist_help), aniValue, v -> {
+            if (AniList.signedIn()) confirm(App.t(R.string.anilist_disconnect_title), App.t(R.string.anilist_disconnect_msg), App.t(R.string.home_disconnect), () -> { AniList.signOut(); rebuild(); });
+            else signIn(AniList.LOGIN, AniList.REDIRECT, REQ_ANILIST);
+        }));
+        aniValue.setText(App.t(AniList.signedIn() ? R.string.home_connected : R.string.home_connect));
+        aniValue.setTextColor(AniList.signedIn() ? GREEN : ACCENT);
+        TextView malValue = new TextView(this);
+        if (!Mal.CLIENT_ID.isEmpty()) secBox.addView(settingRow(R.drawable.ic_movie, "MyAnimeList", App.t(R.string.mal_help), malValue, v -> {
+            if (Mal.signedIn()) confirm(App.t(R.string.mal_disconnect_title), App.t(R.string.mal_disconnect_msg), App.t(R.string.home_disconnect), () -> { Mal.signOut(); rebuild(); });
+            else signIn(Mal.loginUrl(), Mal.REDIRECT, REQ_MAL);
+        }));
+        malValue.setText(App.t(Mal.signedIn() ? R.string.home_connected : R.string.home_connect));
+        malValue.setTextColor(Mal.signedIn() ? GREEN : ACCENT);
 
         section(App.t(R.string.dl_title), R.drawable.ic_download);
         TextView dlValue = new TextView(this);
@@ -2080,6 +2122,41 @@ public class Home extends Activity {
                 });
             });
         }, every * 1000L);
+    }
+
+    /** Shows a code to enter at trakt.tv/activate (where you can also make the free account) and waits for it, as for Simkl. */
+    void traktDialog() {
+        TextView steps = text(App.t(R.string.home_getting_code), sp(17, 15), TEXT, false), code = text("", sp(40, 32), TEXT, true);
+        code.setLetterSpacing(0.15f);
+        code.setPadding(0, dp(14), 0, dp(6));
+        AlertDialog d = new AlertDialog.Builder(this).setTitle(App.t(R.string.trakt_connect)).setView(WebActivity.box(this, steps, code)).setNegativeButton(android.R.string.cancel, null).create();
+        boolean[] open = {true};
+        d.setOnDismissListener(x -> open[0] = false);
+        d.show();
+        App.io.execute(() -> {
+            Trakt.Code c = Trakt.newCode();
+            runOnUiThread(() -> {
+                if (!open[0]) return;
+                if (c == null) { steps.setText(App.t(R.string.trakt_offline)); return; }
+                steps.setText(App.t(R.string.home_simkl_steps, c.page.replaceFirst("^https?://", "")));
+                code.setText(c.user);
+                Runnable[] poll = new Runnable[1];
+                int[] every = {c.interval};
+                poll[0] = () -> App.io.execute(() -> {
+                    String r = Trakt.check(c);
+                    runOnUiThread(() -> {
+                        if (!open[0]) return;
+                        switch (r) {
+                            case "ok": d.dismiss(); toast(App.t(R.string.trakt_connected)); rebuild(); break;
+                            case "expired": steps.setText(App.t(R.string.trakt_expired)); break;
+                            case "error": steps.setText(App.t(R.string.trakt_refused)); break;
+                            default: if (r.equals("slow")) every[0] += 5; App.main.postDelayed(poll[0], every[0] * 1000L);
+                        }
+                    });
+                });
+                App.main.postDelayed(poll[0], every[0] * 1000L);
+            });
+        });
     }
 
     /** Shows a code to enter at punchplay.tv/link (where you can also make the free account) and waits for it, as for Simkl. */
