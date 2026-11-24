@@ -22,11 +22,12 @@ AnantPlay is MIT licensed (see `LICENSE`). It includes, or downloads at build or
 | OpenSubtitles through the [Stremio addon](https://opensubtitles-v3.strem.io) | subtitles in the native player |
 | [TMDB](https://www.themoviedb.org) | your country's rows (through the [TMDB Stremio addon](https://tmdb.elfhosted.com)), and the language New / Popular rows and brand pages, built daily and weekly by [AnantPlay/scraper](https://github.com/AnantPlay/scraper) |
 | [Kitsu](https://kitsu.io) | anime lists (through the [Kitsu Stremio addon](https://anime-kitsu.strem.fun)) |
+| [Tenor](https://tenor.com)'s CDN (`media.tenor.com`) | three cat GIFs on the loading screen, only when you turn the cats on in Settings: fetched once and kept on the device (not bundled; they belong to their creators) |
 | Cloudflare WARP | the optional tunnel; registered through Cloudflare's own endpoint at first start |
 
 Sites, channel playlists and title links come only from the sources a user adds in *Settings, Sources*; the app carries none. The list AnantPlay offers by default is [AnantPlay/index](https://github.com/AnantPlay/index).
 
-This product uses the TMDB API but is not endorsed or certified by TMDB. AnantPlay is not affiliated with or endorsed by Cloudflare, Stremio, OpenSubtitles, TMDB, Kitsu, the maintainers of any source, or any streaming site.
+This product uses the TMDB API but is not endorsed or certified by TMDB. AnantPlay is not affiliated with or endorsed by Cloudflare, Tenor, Stremio, OpenSubtitles, TMDB, Kitsu, the maintainers of any source, or any streaming site.
 
 ## Icons
 

@@ -29,6 +29,10 @@
     <string name="home_catalog_offline">Can\'t reach the catalog. Check WARP.</string>
     <string name="home_more_arrow">"More  ›"</string>
     <string name="home_sites">Sites</string>
+    <string name="home_loading_screen">Loading screen</string>
+    <string name="home_loading_screen_help">What shows while the app opens a site and finds the video. Cats: one spins while it works, jumps when the stream is found and stares when it gets stuck. They are three GIFs fetched once from Tenor, only when you turn them on, and they stay off when the device\'s animations are off.</string>
+    <string name="home_loading_spinner">Spinner</string>
+    <string name="home_loading_cats">Cats</string>
     <string name="home_new_anime">New anime</string>
     <string name="home_newly_released">Newly released</string>
     <string name="home_popular_animation">Popular anime</string>

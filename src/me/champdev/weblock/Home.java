@@ -75,7 +75,8 @@ public class Home extends Activity {
 
     @Override protected void onCreate(Bundle state) {
         super.onCreate(state);
-        App.io.execute(() -> {   // the loading cats of older versions: their folder goes, so this is one look from then on
+        if (GifView.on()) GifView.prefetch();   // the loading cats (Settings, Loading screen), fetched once
+        else App.io.execute(() -> {   // cats off: nothing kept, so the folder goes and this is one look from then on
             java.io.File dir = new java.io.File(getFilesDir(), "gif");
             java.io.File[] old = dir.listFiles();
             if (old != null) { for (java.io.File f : old) f.delete(); dir.delete(); }
@@ -1934,6 +1935,15 @@ public class Home extends Activity {
 
         section(App.t(R.string.home_sites), R.drawable.ic_language);
         secBox.addView(settingRow(R.drawable.ic_add, App.t(R.string.home_add_site), App.t(R.string.home_add_site_help), null, v -> addSiteDialog()));
+        TextView catsValue = new TextView(this);
+        secBox.addView(settingRow(R.drawable.ic_movie, App.t(R.string.home_loading_screen), App.t(R.string.home_loading_screen_help), catsValue, v -> {
+            App.prefs.edit().putBoolean("cats", !App.prefs.getBoolean("cats", false)).apply();
+            GifView.prefetch();
+            rebuild();
+        }));
+        boolean cats = App.prefs.getBoolean("cats", false);
+        catsValue.setText(App.t(cats ? R.string.home_loading_cats : R.string.home_loading_spinner));
+        catsValue.setTextColor(cats ? GREEN : MUTED);
         secBox.addView(settingRow(R.drawable.ic_refresh, App.t(R.string.sources_refresh), App.t(R.string.sources_refresh_help), null, v -> {
             toast(App.t(R.string.sources_checking));
             App.io.execute(() -> {
